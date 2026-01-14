@@ -11,7 +11,7 @@ public:
     device_index_ = declare_parameter<int>("device_index", 0);
     width_        = declare_parameter<int>("width", 640);
     height_       = declare_parameter<int>("height", 480);
-    fps_          = declare_parameter<int>("fps", 30);
+    fps_          = declare_parameter<int>("fps", 120);
     frame_id_     = declare_parameter<std::string>("frame_id", "camera_frame");
     image_topic_  = declare_parameter<std::string>("image_topic", "/camera/image_raw");
 
@@ -56,7 +56,7 @@ private:
   }
 
 private:
-  int device_index_{0}, width_{640}, height_{480}, fps_{30};
+  int device_index_{0}, width_{640}, height_{480}, fps_{120};
   std::string frame_id_{"camera_frame"};
   std::string image_topic_{"/camera/image_raw"};
 

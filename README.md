@@ -103,7 +103,7 @@ source install/setup.bash
 ## 6. 运行
 
 ```bash
-ros2 launch line_following line_following_full.launch.py
+ros2 launch line_following line_following.launch.py
 ```
 
 启动后将自动运行：

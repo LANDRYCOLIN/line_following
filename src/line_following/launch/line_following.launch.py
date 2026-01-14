@@ -14,7 +14,7 @@ def generate_launch_description():
                 'device_index': 0,
                 'width': 640,
                 'height': 480,
-                'fps': 30,
+                'fps': 120,
                 'image_topic': '/camera/image_raw'
             }]
         ),
