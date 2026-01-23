@@ -28,6 +28,10 @@ public:
     threshold_     = declare_parameter<int>("threshold", 60);
     roi_ratio_     = declare_parameter<double>("roi_ratio", 1.0);
     morph_ksize_   = declare_parameter<int>("morph_ksize", 5);
+    blur_ksize_    = declare_parameter<int>("blur_ksize", 5);
+    bilateral_d_   = declare_parameter<int>("bilateral_d", 0);
+    bilateral_sigma_color_ = declare_parameter<double>("bilateral_sigma_color", 25.0);
+    bilateral_sigma_space_ = declare_parameter<double>("bilateral_sigma_space", 25.0);
     publish_debug_ = declare_parameter<bool>("publish_debug", true);
     publish_binary_debug_ = declare_parameter<bool>("publish_binary_debug", true);
 
@@ -81,6 +85,8 @@ private:
 
     cv::Mat gray;
     cv::cvtColor(roi, gray, cv::COLOR_BGR2GRAY);
+
+    applyPreFilters(gray);
 
     cv::Mat binary;
     cv::threshold(gray, binary, threshold_, 255, cv::THRESH_BINARY_INV);
@@ -286,6 +292,25 @@ private:
     return true;
   }
 
+  void applyPreFilters(cv::Mat &gray) const {
+    if (gray.empty()) {
+      return;
+    }
+    if (blur_ksize_ > 1) {
+      int ksize = blur_ksize_;
+      if (ksize % 2 == 0) {
+        ksize += 1;
+      }
+      ksize = std::max(3, ksize);
+      cv::GaussianBlur(gray, gray, cv::Size(ksize, ksize), 0);
+    }
+    if (bilateral_d_ > 0) {
+      cv::bilateralFilter(gray, gray, bilateral_d_,
+                          std::max(1.0, bilateral_sigma_color_),
+                          std::max(1.0, bilateral_sigma_space_));
+    }
+  }
+
   void applyBorderMask(cv::Mat &mask) const {
     if (mask.empty()) {
       return;
@@ -314,6 +339,10 @@ private:
   int threshold_;
   double roi_ratio_;
   int morph_ksize_;
+  int blur_ksize_;
+  int bilateral_d_;
+  double bilateral_sigma_color_;
+  double bilateral_sigma_space_;
   bool publish_debug_;
   bool publish_binary_debug_;
   int skeleton_max_iter_;

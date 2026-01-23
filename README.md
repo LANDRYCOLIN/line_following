@@ -146,6 +146,10 @@ line_detector_node:
     threshold: 60
     roi_ratio: 1.0
     morph_ksize: 5
+    blur_ksize: 5
+    bilateral_d: 0
+    bilateral_sigma_color: 25.0
+    bilateral_sigma_space: 25.0
     skeleton_max_iter: 250
     skeleton_smooth_ksize: 3
     intersection_margin: 2
@@ -161,6 +165,10 @@ line_detector_node:
 | `threshold`           | 黑线二值化阈值                    |
 | `roi_ratio`           | ROI 区域比例（1.0 表示整幅图像）       |
 | `morph_ksize`         | 形态学开运算核大小                 |
+| `blur_ksize`          | 阈值前的 Gaussian 模糊核大小（奇数）  |
+| `bilateral_d`         | 双边滤波采样直径（0 则关闭）         |
+| `bilateral_sigma_color` | 双边滤波颜色参数               |
+| `bilateral_sigma_space` | 双边滤波空间参数               |
 | `skeleton_max_iter`   | 骨架提取的最大迭代次数               |
 | `skeleton_smooth_ksize` | 骨架图的平滑核尺寸（需为奇数）         |
 | `intersection_margin` | 交点坐标的安全边界（像素）             |
