@@ -39,6 +39,12 @@ ament_target_dependencies(line_controller_node
   geometry_msgs
 )
 
+add_executable(serial_bridge_node src/serial_bridge_node.cpp)
+ament_target_dependencies(serial_bridge_node
+  rclcpp
+  geometry_msgs
+)
+
 add_executable(camera_node src/camera_node.cpp)
 ament_target_dependencies(camera_node
   rclcpp
@@ -52,6 +58,7 @@ target_link_libraries(camera_node ${OpenCV_LIBS})
 install(TARGETS
   line_detector_node
   line_controller_node
+  serial_bridge_node
   camera_node
   DESTINATION lib/${PROJECT_NAME}
 )

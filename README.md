@@ -17,6 +17,7 @@
   - 直角交点检测（两条黑线交汇点）
   - 质心位置归一化输出（左上角为 0,0）
 - 发布调试图像 `/line/debug_image`
+- 串口桥接节点：按照固定帧格式将视觉坐标以 50 Hz 下发到电控 MCU，并回读心跳
 - 参数全部支持 YAML / launch 配置
 - 使用 `launch` 启动
 
@@ -28,20 +29,28 @@
 
 +----------------+
 |  camera_node   |
-|  (OpenCV)      |
+|  (OpenCV/V4L2) |
 +--------+-------+
-|
-|  /camera/image_raw
-v
+     |
+     |  /camera/image_raw
+     v
 +---------------------+
 | line_detector_node  |
 |  - black line detect|
-|  - error compute    |
-+--------+------------+
-|
-|  /line/error (Float32)
-|
-+--> /line/debug_image (Image)
+|  - corner extract   |
++-----+---------+-----+
+  |         |
+  |         +--> /line/debug_image (Image)
+  |             /line/binary_image (Image)
+  |
+  +--> /line/error  (Float32)
+       /line/corner (Point)
+        |
+        v
+       +----------------------+
+       |  serial_bridge_node  |
+       |  -> UART to MCU      |
+       +----------------------+
 
 ````
 
@@ -70,20 +79,28 @@ sudo apt install \
 
 ## 4. 工程结构
 
+以本仓库为 ROS 2 工作空间根目录（lf_demo）为例：
+
 ```
-line_following/
+lf_demo/
 ├── src/
-│   ├── camera_node.cpp          # 相机发布节点
-│   ├── line_detector_node.cpp   # 巡线检测节点
+│   └── line_following/
+│       ├── src/
+│       │   ├── camera_node.cpp          # 相机发布节点
+│       │   ├── line_detector_node.cpp   # 巡线检测节点（黑线+直角交点）
+│       │   ├── line_controller_node.cpp # 预留控制器节点（当前为占位实现）
+│       │   └── serial_bridge_node.cpp   # 串口桥接到 MCU
+│       │
+│       ├── launch/
+│       │   └── line_following.launch.py # 一键启动全流程
+│       │
+│       ├── include/                     # 头文件（如需拆分）
+│       ├── CMakeLists.txt
+│       └── package.xml
 │
-├── launch/
-│   └── line_following_full.launch.py
-│
-├── config/
-│   └── line_detector.yaml       # 巡线参数配置
-│
-├── CMakeLists.txt
-├── package.xml
+├── build/                               # colcon build 生成
+├── install/
+├── log/
 └── README.md
 ```
 
@@ -109,6 +126,7 @@ ros2 launch line_following line_following.launch.py
 
 * 相机节点 `camera_node`
 * 巡线检测节点 `line_detector_node`
+* 串口桥接节点 `serial_bridge_node`
 * `rqt_image_view`
 
 ---
@@ -132,7 +150,14 @@ ros2 launch line_following line_following.launch.py
 
 ---
 
-## 8. 参数配置（config/line_detector.yaml）
+## 8. 参数配置
+
+当前示例在 [src/line_following/launch/line_following.launch.py](src/line_following/launch/line_following.launch.py) 中**以内联参数**形式配置所有节点；
+如果你更习惯 YAML，可以新建 `config/*.yaml` 并在 launch 中通过 `parameters=[PathJoinSubstitution([...])]` 引用。
+
+下面给出与当前 launch 等价的 YAML 示例，便于迁移到外部配置文件。
+
+### 8.1 巡线检测节点（line_detector_node）
 
 ```yaml
 line_detector_node:
@@ -153,9 +178,21 @@ line_detector_node:
     skeleton_max_iter: 250
     skeleton_smooth_ksize: 3
     intersection_margin: 2
-    border_margin_px: 8
+    border_margin_px: 8        # launch 中默认 8，代码默认 60，可视场景调整
     publish_binary_debug: true
     publish_debug: true
+```
+
+### 8.2 串口桥接节点（serial_bridge_node）
+
+```yaml
+serial_bridge_node:
+  ros__parameters:
+    serial_port: /dev/pts/4      # 示例中使用 pseudo TTY，实际 MCU 可改为 /dev/ttyUSB0
+    corner_topic: /line/corner
+    send_period_ms: 20           # 50 Hz
+    confidence_value: 255
+    log_heartbeat: true
 ```
 
 ### 参数说明
@@ -175,6 +212,10 @@ line_detector_node:
 | `border_margin_px`   | ROI 内部需忽略的边缘宽度               |
 | `publish_binary_debug`| 是否发布二值化调试图                 |
 | `publish_debug`       | 是否发布叠加调试图                  |
+| `serial_port`         | 串口设备路径（如 `/dev/ttyUSB0`）       |
+| `send_period_ms`      | 串口下发周期（毫秒）                |
+| `confidence_value`    | 无额外置信度时的填充值               |
+| `log_heartbeat`       | 是否打印 MCU 心跳日志（DEBUG 级别）      |
 
 ---
 
@@ -206,6 +247,10 @@ ros2 topic echo /line/error
 * 当前假设地面存在 **明显黑色线条**
 * 光照变化较大时需调整 `threshold` 或引入自适应算法
 * 镜头畸变较大时建议使用 `camera_calibration` 先标定，再在相机节点中进行去畸变以提升识别精度
+* 串口帧格式：`SOF(0xA5) | LEN | TYPE | SEQ | PAYLOAD | CRC16`  
+  * VISION_POINT (`TYPE=0x01`, LEN=6)：`valid(1B) | x_q(2B) | y_q(2B) | conf(1B)`，`x_q=y_q=round(norm*10000)`  
+  * MCU_HEARTBEAT (`TYPE=0x81`, LEN=5)：`mode | err | seq_echo | counter(2B)`  
+  * CRC16-CCITT，多项式 `0x1021`，初值 `0xFFFF`，不反转，小端发送（低字节在前）
 
 ---
 
