@@ -28,7 +28,7 @@ def generate_launch_description():
             parameters=[{
                 'image_topic': '/camera/image_raw',
                 'threshold': 60,
-                'roi_ratio': 0.5,
+                'roi_ratio': 1.0,
                 'morph_ksize': 5,
                 'publish_debug': True
             }]

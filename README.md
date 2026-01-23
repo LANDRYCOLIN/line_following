@@ -11,12 +11,11 @@
 - 使用 **笔记本摄像头（V4L2）** 作为输入
 - 自定义 **ROS 2 相机节点**，发布 `/camera/image_raw`
 - 巡线检测节点：
-  - ROI（下半部分）处理
-  - 灰度化 + 二值化
-  - 形态学去噪
-  - 最大黑色轮廓提取
-  - 黑线质心计算
-  - 巡线误差归一化输出
+  - 全图 ROI 处理（默认使用整幅图像）
+  - 灰度化 + 二值化 + 形态学去噪
+  - 骨架提取（skeletonization）+ 直线拟合，适配有宽度的黑胶带
+  - 直角交点检测（两条黑线交汇点）
+  - 质心位置归一化输出（左上角为 0,0）
 - 发布调试图像 `/line/debug_image`
 - 参数全部支持 YAML / launch 配置
 - 使用 `launch` 启动
@@ -127,6 +126,8 @@ ros2 launch line_following line_following.launch.py
 | 话题名                 | 类型                  | 说明               |
 | ------------------- | ------------------- | ---------------- |
 | `/line/error`       | `std_msgs/Float32`  | 巡线误差，范围约 [-1, 1] |
+| `/line/corner`      | `geometry_msgs/Point` | 直角交点归一化坐标（左上为 0,0） |
+| `/line/binary_image`| `sensor_msgs/Image` | 二值化调试图，便于 rqt 排查 |
 | `/line/debug_image` | `sensor_msgs/Image` | 巡线调试图像           |
 
 ---
@@ -139,21 +140,33 @@ line_detector_node:
     image_topic: /camera/image_raw
     error_topic: /line/error
     debug_topic: /line/debug_image
+    binary_topic: /line/binary_image
+    corner_topic: /line/corner
 
     threshold: 60
-    roi_ratio: 0.5
+    roi_ratio: 1.0
     morph_ksize: 5
+    skeleton_max_iter: 250
+    skeleton_smooth_ksize: 3
+    intersection_margin: 2
+    border_margin_px: 8
+    publish_binary_debug: true
     publish_debug: true
 ```
 
 ### 参数说明
 
-| 参数              | 说明                   |
-| --------------- | -------------------- |
-| `threshold`     | 黑线二值化阈值              |
-| `roi_ratio`     | ROI 区域比例（0.5 表示下半部分） |
-| `morph_ksize`   | 形态学核大小               |
-| `publish_debug` | 是否发布调试图              |
+| 参数                    | 说明                         |
+| --------------------- | -------------------------- |
+| `threshold`           | 黑线二值化阈值                    |
+| `roi_ratio`           | ROI 区域比例（1.0 表示整幅图像）       |
+| `morph_ksize`         | 形态学开运算核大小                 |
+| `skeleton_max_iter`   | 骨架提取的最大迭代次数               |
+| `skeleton_smooth_ksize` | 骨架图的平滑核尺寸（需为奇数）         |
+| `intersection_margin` | 交点坐标的安全边界（像素）             |
+| `border_margin_px`   | ROI 内部需忽略的边缘宽度               |
+| `publish_binary_debug`| 是否发布二值化调试图                 |
+| `publish_debug`       | 是否发布叠加调试图                  |
 
 ---
 
@@ -184,6 +197,7 @@ ros2 topic echo /line/error
 * 仅实现 **感知部分**，未包含控制器（PID / cmd_vel）
 * 当前假设地面存在 **明显黑色线条**
 * 光照变化较大时需调整 `threshold` 或引入自适应算法
+* 镜头畸变较大时建议使用 `camera_calibration` 先标定，再在相机节点中进行去畸变以提升识别精度
 
 ---
 

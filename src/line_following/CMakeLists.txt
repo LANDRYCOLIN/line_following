@@ -26,6 +26,7 @@ ament_target_dependencies(line_detector_node
   rclcpp
   sensor_msgs
   std_msgs
+  geometry_msgs
   cv_bridge
   # image_transport
 )
