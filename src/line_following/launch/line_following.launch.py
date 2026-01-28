@@ -51,7 +51,7 @@ def generate_launch_description():
             name='serial_bridge_node',
             output='screen',
             parameters=[{
-                'serial_port': '/dev/pts/4',
+                'serial_port': '/dev/ttyUSB0',
                 'corner_topic': '/line/corner',
                 'send_period_ms': 20,
                 'confidence_value': 255,

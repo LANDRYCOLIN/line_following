@@ -21,6 +21,8 @@ constexpr uint8_t TYPE_VISION_POINT = 0x01;
 constexpr uint8_t TYPE_HEARTBEAT = 0x81;
 constexpr uint8_t PAYLOAD_LEN_VISION = 6;
 constexpr uint8_t PAYLOAD_LEN_HEARTBEAT = 5;
+constexpr uint8_t TYPE_VISION_ECHO = 0x82;
+constexpr uint8_t PAYLOAD_LEN_ECHO = 6;
 
 uint16_t crc16_ccitt(const uint8_t * data, size_t length) {
   uint16_t crc = 0xFFFF;
@@ -41,7 +43,7 @@ uint16_t crc16_ccitt(const uint8_t * data, size_t length) {
 class SerialBridgeNode : public rclcpp::Node {
 public:
   SerialBridgeNode() : Node("serial_bridge_node"), seq_(0) {
-    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/pts/4");
+    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyUSB0");
     corner_topic_ = declare_parameter<std::string>("corner_topic", "/line/corner");
     publish_heartbeat_log_ = declare_parameter<bool>("log_heartbeat", true);
     confidence_value_ = declare_parameter<int>("confidence_value", 255);
@@ -64,7 +66,7 @@ public:
     running_.store(true);
     reader_thread_ = std::thread(&SerialBridgeNode::readLoop, this);
 
-    RCLCPP_INFO(get_logger(), "Serial bridge running on %s (460800 8N1)", serial_port_.c_str());
+    RCLCPP_INFO(get_logger(), "Serial bridge running on %s (115200 8N1)", serial_port_.c_str());
   }
 
   ~SerialBridgeNode() override {
@@ -98,8 +100,8 @@ private:
     }
 
     cfmakeraw(&tty);
-    cfsetispeed(&tty, B460800);
-    cfsetospeed(&tty, B460800);
+    cfsetispeed(&tty, B115200);
+    cfsetospeed(&tty, B115200);
 
     tty.c_cflag |= (CLOCAL | CREAD);
     tty.c_cflag &= ~PARENB;
@@ -202,7 +204,7 @@ private:
         continue;
       }
       const uint8_t type = buffer[2];
-      if (type == TYPE_HEARTBEAT && len == PAYLOAD_LEN_HEARTBEAT) {
+if (type == TYPE_HEARTBEAT && len == PAYLOAD_LEN_HEARTBEAT) {
         Heartbeat hb;
         hb.mode = buffer[4];
         hb.err = buffer[5];
@@ -210,9 +212,21 @@ private:
         hb.counter = static_cast<uint16_t>(buffer[7]) |
                      (static_cast<uint16_t>(buffer[8]) << 8);
         if (publish_heartbeat_log_) {
-          RCLCPP_DEBUG(get_logger(), "Heartbeat mode=%u err=%u seq=%u counter=%u",
-                       hb.mode, hb.err, hb.seq_echo, hb.counter);
+          RCLCPP_INFO(get_logger(), "Heartbeat mode=%u err=%u seq=%u counter=%u",
+                      hb.mode, hb.err, hb.seq_echo, hb.counter);
         }
+      } else if (type == TYPE_VISION_ECHO && len == PAYLOAD_LEN_ECHO) {
+        const uint8_t valid = buffer[4];
+        const uint16_t x_q = static_cast<uint16_t>(buffer[5]) |
+                             (static_cast<uint16_t>(buffer[6]) << 8);
+        const uint16_t y_q = static_cast<uint16_t>(buffer[7]) |
+                             (static_cast<uint16_t>(buffer[8]) << 8);
+        const uint8_t conf = buffer[9];
+        const uint8_t seq = buffer[3];
+
+        RCLCPP_INFO(get_logger(),
+          "[ECHO] seq=%u valid=%u x_q=%u y_q=%u conf=%u (x=%.4f y=%.4f)",
+          seq, valid, x_q, y_q, conf, x_q / 10000.0, y_q / 10000.0);
       }
       buffer.erase(buffer.begin(), buffer.begin() + total);
     }
