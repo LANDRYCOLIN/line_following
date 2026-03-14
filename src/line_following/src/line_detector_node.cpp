@@ -89,7 +89,7 @@ private:
     applyPreFilters(gray);
 
     cv::Mat binary;
-    cv::threshold(gray, binary, threshold_, 255, cv::THRESH_BINARY_INV);
+    cv::threshold(gray, binary, threshold_, 255, cv::THRESH_BINARY);
 
     int k = std::max(1, morph_ksize_);
     if (k % 2 == 0) k += 1;
