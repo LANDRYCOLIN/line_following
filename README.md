@@ -90,9 +90,11 @@ lf_demo/
 │       │   ├── line_detector_node.cpp   # 巡线检测节点（黑线+直角交点）
 │       │   ├── line_controller_node.cpp # 预留控制器节点（当前为占位实现）
 │       │   └── serial_bridge_node.cpp   # 串口桥接到 MCU
+│       │   └── point_gui_node.cpp       # GUI 手动点位模拟器
 │       │
 │       ├── launch/
-│       │   └── line_following.launch.py # 一键启动全流程
+│       │   ├── line_following.launch.py     # 一键启动全流程（相机+检测+串口）
+│       │   └── line_following_sim.launch.py # GUI 模拟器（手动点位+串口）
 │       │
 │       ├── include/                     # 头文件（如需拆分）
 │       ├── CMakeLists.txt
@@ -128,6 +130,17 @@ ros2 launch line_following line_following.launch.py
 * 巡线检测节点 `line_detector_node`
 * 串口桥接节点 `serial_bridge_node`
 * `rqt_image_view`
+
+### 6.1 GUI 模拟器运行
+
+```bash
+ros2 launch line_following line_following_sim.launch.py
+```
+
+启动后将自动运行：
+
+* GUI 点位模拟器 `point_gui_node`（鼠标拖动设置点位，右键清除，WASD 微调）
+* 串口桥接节点 `serial_bridge_node`
 
 ---
 
