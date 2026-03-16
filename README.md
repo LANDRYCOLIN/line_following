@@ -1,6 +1,6 @@
 # line_following
 
-一个基于 **ROS 2 (Jazzy) + OpenCV** 的巡线感知 Demo，实现了从 **真实摄像头采集 → 黑线识别 → 误差输出** 的完整视觉链路，适合用于巡线小车以及后续控制闭环扩展。
+一个基于 **ROS 2 (Jazzy) + OpenCV** 的巡线感知 Demo，面向 **白色宽条** 场景，支持 **视频回放或摄像头输入**，输出角点与误差，适合巡线小车与后续控制闭环扩展。
 
 ---
 
@@ -8,14 +8,14 @@
 
 当前版本已实现：
 
-- 使用 **笔记本摄像头（V4L2）** 作为输入
+- 使用 **视频或摄像头（V4L2）** 作为输入
 - 自定义 **ROS 2 相机节点**，发布 `/camera/image_raw`
-- 巡线检测节点：
-  - 全图 ROI 处理（默认使用整幅图像）
-  - 灰度化 + 二值化 + 形态学去噪
-  - 骨架提取（skeletonization）+ 直线拟合，适配有宽度的黑胶带
-  - 直角交点检测（两条黑线交汇点）
-  - 质心位置归一化输出（左上角为 0,0）
+- 巡线检测节点（白色宽条）：
+  - ROI 裁剪
+  - 灰度化 + 自适应阈值（或固定阈值）+ 形态学清理
+  - 距离变换提取中心线（适配宽条）
+  - Hough 线段 + 角点筛选（支持 L/T 角点，非严格 90 度）
+  - 角点位置归一化输出（左上角为 0,0）
 - 发布调试图像 `/line/debug_image`
 - 串口桥接节点：按照固定帧格式将视觉坐标以 50 Hz 下发到电控 MCU，并回读心跳
 - 参数全部支持 YAML / launch 配置
@@ -29,15 +29,15 @@
 
 +----------------+
 |  camera_node   |
-|  (OpenCV/V4L2) |
+|  (Video/V4L2)  |
 +--------+-------+
      |
      |  /camera/image_raw
      v
 +---------------------+
 | line_detector_node  |
-|  - black line detect|
-|  - corner extract   |
+|  - white strip seg  |
+|  - centerline/Hough |
 +-----+---------+-----+
   |         |
   |         +--> /line/debug_image (Image)
@@ -52,7 +52,7 @@
        |  -> UART to MCU      |
        +----------------------+
 
-````
+```
 
 ---
 
@@ -73,7 +73,7 @@ sudo apt install \
   ros-jazzy-cv-bridge \
   ros-jazzy-rqt-image-view \
   libopencv-dev
-````
+```
 
 ---
 
@@ -87,7 +87,7 @@ lf_demo/
 │   └── line_following/
 │       ├── src/
 │       │   ├── camera_node.cpp          # 相机发布节点
-│       │   ├── line_detector_node.cpp   # 巡线检测节点（黑线+直角交点）
+│       │   ├── line_detector_node.cpp   # 巡线检测节点（白条+角点）
 │       │   ├── line_controller_node.cpp # 预留控制器节点（当前为占位实现）
 │       │   └── serial_bridge_node.cpp   # 串口桥接到 MCU
 │       │   └── point_gui_node.cpp       # GUI 手动点位模拟器
@@ -131,6 +131,17 @@ ros2 launch line_following line_following.launch.py
 * 串口桥接节点 `serial_bridge_node`
 * `rqt_image_view`
 
+### 6.0 输入源切换（视频 / 摄像头）
+
+默认使用视频作为输入，可在 `line_following.launch.py` 中调整：
+
+```python
+use_video: True
+video_path: /home/mechax/lf_demo/test.mp4
+```
+
+如需切回摄像头，将 `use_video` 设为 `False` 并设置 `device_index`。
+
 ### 6.1 GUI 模拟器运行
 
 ```bash
@@ -157,7 +168,7 @@ ros2 launch line_following line_following_sim.launch.py
 | 话题名                 | 类型                  | 说明               |
 | ------------------- | ------------------- | ---------------- |
 | `/line/error`       | `std_msgs/Float32`  | 巡线误差，范围约 [-1, 1] |
-| `/line/corner`      | `geometry_msgs/Point` | 直角交点归一化坐标（左上为 0,0） |
+| `/line/corner`      | `geometry_msgs/Point` | 角点归一化坐标（L/T 角点，左上为 0,0） |
 | `/line/binary_image`| `sensor_msgs/Image` | 二值化调试图，便于 rqt 排查 |
 | `/line/debug_image` | `sensor_msgs/Image` | 巡线调试图像           |
 
@@ -181,17 +192,33 @@ line_detector_node:
     binary_topic: /line/binary_image
     corner_topic: /line/corner
 
-    threshold: 60
+    threshold: 210
+    auto_threshold: true
+    auto_thresh_k: 2.0
+    auto_thresh_min: 160
+    auto_thresh_max: 235
     roi_ratio: 1.0
     morph_ksize: 5
+    close_ksize: 9
+    open_ksize: 5
     blur_ksize: 5
     bilateral_d: 0
     bilateral_sigma_color: 25.0
     bilateral_sigma_space: 25.0
-    skeleton_max_iter: 250
-    skeleton_smooth_ksize: 3
     intersection_margin: 2
     border_margin_px: 8        # launch 中默认 8，代码默认 60，可视场景调整
+    centerline_ratio: 0.55
+    centerline_use_nms: true
+    centerline_nms_ksize: 3
+    hough_threshold: 30
+    hough_min_length: 20
+    hough_max_gap: 20
+    corner_angle_min_deg: 60.0
+    corner_angle_max_deg: 120.0
+    corner_max_dist_px: 15
+    corner_len_weight: 1.0
+    corner_angle_weight: 1.0
+    corner_dist_weight: 1.5
     publish_binary_debug: true
     publish_debug: true
 ```
@@ -212,17 +239,33 @@ serial_bridge_node:
 
 | 参数                    | 说明                         |
 | --------------------- | -------------------------- |
-| `threshold`           | 黑线二值化阈值                    |
+| `threshold`           | 白条二值化阈值                    |
+| `auto_threshold`      | 是否启用自适应阈值                 |
+| `auto_thresh_k`       | 自适应阈值系数（mean + k * std） |
+| `auto_thresh_min`     | 自适应阈值下限                    |
+| `auto_thresh_max`     | 自适应阈值上限                    |
 | `roi_ratio`           | ROI 区域比例（1.0 表示整幅图像）       |
 | `morph_ksize`         | 形态学开运算核大小                 |
+| `close_ksize`         | 形态学闭运算核大小（连通白条）         |
+| `open_ksize`          | 形态学开运算核大小（去噪）           |
 | `blur_ksize`          | 阈值前的 Gaussian 模糊核大小（奇数）  |
 | `bilateral_d`         | 双边滤波采样直径（0 则关闭）         |
 | `bilateral_sigma_color` | 双边滤波颜色参数               |
 | `bilateral_sigma_space` | 双边滤波空间参数               |
-| `skeleton_max_iter`   | 骨架提取的最大迭代次数               |
-| `skeleton_smooth_ksize` | 骨架图的平滑核尺寸（需为奇数）         |
 | `intersection_margin` | 交点坐标的安全边界（像素）             |
 | `border_margin_px`   | ROI 内部需忽略的边缘宽度               |
+| `centerline_ratio`    | 中心线阈值比例（距离变换占比）        |
+| `centerline_use_nms`  | 是否启用中心线 NMS 提取            |
+| `centerline_nms_ksize`| 中心线 NMS 核大小               |
+| `hough_threshold`     | Hough 线段检测阈值               |
+| `hough_min_length`    | Hough 最小线段长度              |
+| `hough_max_gap`       | Hough 线段最大间隔              |
+| `corner_angle_min_deg`| 角点最小夹角（度）                 |
+| `corner_angle_max_deg`| 角点最大夹角（度）                 |
+| `corner_max_dist_px`  | 交点到线段的最大距离（像素）           |
+| `corner_len_weight`   | 线段长度评分权重                  |
+| `corner_angle_weight` | 角度评分权重                    |
+| `corner_dist_weight`  | 距离评分权重                    |
 | `publish_binary_debug`| 是否发布二值化调试图                 |
 | `publish_debug`       | 是否发布叠加调试图                  |
 | `serial_port`         | 串口设备路径（如 `/dev/ttyUSB0`）       |
@@ -257,8 +300,8 @@ ros2 topic echo /line/error
 ## 10. 已知说明
 
 * 仅实现 **感知部分**，未包含控制器（PID / cmd_vel）
-* 当前假设地面存在 **明显黑色线条**
-* 光照变化较大时需调整 `threshold` 或引入自适应算法
+* 当前假设地面存在 **明显白色宽条**
+* 光照变化较大时需调整 `auto_thresh_*` 或 `threshold`
 * 镜头畸变较大时建议使用 `camera_calibration` 先标定，再在相机节点中进行去畸变以提升识别精度
 * 串口帧格式：`SOF(0xA5) | LEN | TYPE | SEQ | PAYLOAD | CRC16`  
   * VISION_POINT (`TYPE=0x01`, LEN=6)：`valid(1B) | x_q(2B) | y_q(2B) | conf(1B)`，`x_q=y_q=round(norm*10000)`  
