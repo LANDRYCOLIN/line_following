@@ -25,9 +25,15 @@ public:
     binary_topic_  = declare_parameter<std::string>("binary_topic", "/line/binary_image");
     corner_topic_  = declare_parameter<std::string>("corner_topic", "/line/corner");
 
-    threshold_     = declare_parameter<int>("threshold", 60);
+    threshold_     = declare_parameter<int>("threshold", 210);
+    auto_threshold_ = declare_parameter<bool>("auto_threshold", true);
+    auto_thresh_k_  = declare_parameter<double>("auto_thresh_k", 2.0);
+    auto_thresh_min_ = declare_parameter<int>("auto_thresh_min", 160);
+    auto_thresh_max_ = declare_parameter<int>("auto_thresh_max", 235);
     roi_ratio_     = declare_parameter<double>("roi_ratio", 1.0);
     morph_ksize_   = declare_parameter<int>("morph_ksize", 5);
+    close_ksize_   = declare_parameter<int>("close_ksize", 9);
+    open_ksize_    = declare_parameter<int>("open_ksize", 5);
     blur_ksize_    = declare_parameter<int>("blur_ksize", 5);
     bilateral_d_   = declare_parameter<int>("bilateral_d", 0);
     bilateral_sigma_color_ = declare_parameter<double>("bilateral_sigma_color", 25.0);
@@ -35,10 +41,20 @@ public:
     publish_debug_ = declare_parameter<bool>("publish_debug", true);
     publish_binary_debug_ = declare_parameter<bool>("publish_binary_debug", true);
 
-    skeleton_max_iter_    = declare_parameter<int>("skeleton_max_iter", 250);
-    skeleton_smooth_ksize_= declare_parameter<int>("skeleton_smooth_ksize", 3);
     intersection_margin_  = declare_parameter<int>("intersection_margin", 2);
     border_margin_px_     = declare_parameter<int>("border_margin_px", 60);
+    centerline_ratio_     = declare_parameter<double>("centerline_ratio", 0.55);
+    centerline_use_nms_   = declare_parameter<bool>("centerline_use_nms", true);
+    centerline_nms_ksize_ = declare_parameter<int>("centerline_nms_ksize", 3);
+    hough_threshold_      = declare_parameter<int>("hough_threshold", 30);
+    hough_min_length_     = declare_parameter<int>("hough_min_length", 20);
+    hough_max_gap_        = declare_parameter<int>("hough_max_gap", 20);
+    corner_angle_min_deg_ = declare_parameter<double>("corner_angle_min_deg", 60.0);
+    corner_angle_max_deg_ = declare_parameter<double>("corner_angle_max_deg", 120.0);
+    corner_max_dist_px_   = declare_parameter<int>("corner_max_dist_px", 15);
+    corner_len_weight_    = declare_parameter<double>("corner_len_weight", 1.0);
+    corner_angle_weight_  = declare_parameter<double>("corner_angle_weight", 1.0);
+    corner_dist_weight_   = declare_parameter<double>("corner_dist_weight", 1.5);
 
     // -------- Publishers --------
     error_pub_ = create_publisher<std_msgs::msg::Float32>(error_topic_, 10);
@@ -89,12 +105,36 @@ private:
     applyPreFilters(gray);
 
     cv::Mat binary;
-    cv::threshold(gray, binary, threshold_, 255, cv::THRESH_BINARY_INV);
+    double threshold_value = static_cast<double>(threshold_);
+    if (auto_threshold_) {
+      cv::Scalar mean, stddev;
+      cv::meanStdDev(gray, mean, stddev);
+      threshold_value = mean[0] + auto_thresh_k_ * stddev[0];
+      threshold_value = std::clamp(threshold_value,
+                                   static_cast<double>(auto_thresh_min_),
+                                   static_cast<double>(auto_thresh_max_));
+    }
+    cv::threshold(gray, binary, threshold_value, 255, cv::THRESH_BINARY);
 
     int k = std::max(1, morph_ksize_);
     if (k % 2 == 0) k += 1;
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, {k, k});
     cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
+
+    if (close_ksize_ > 1) {
+      int ck = close_ksize_;
+      if (ck % 2 == 0) ck += 1;
+      ck = std::max(3, ck);
+      cv::Mat close_kernel = cv::getStructuringElement(cv::MORPH_RECT, {ck, ck});
+      cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, close_kernel);
+    }
+    if (open_ksize_ > 1) {
+      int ok = open_ksize_;
+      if (ok % 2 == 0) ok += 1;
+      ok = std::max(3, ok);
+      cv::Mat open_kernel = cv::getStructuringElement(cv::MORPH_RECT, {ok, ok});
+      cv::morphologyEx(binary, binary, cv::MORPH_OPEN, open_kernel);
+    }
 
     applyBorderMask(binary);
 
@@ -103,19 +143,22 @@ private:
       binary_pub_->publish(*bin_msg);
     }
 
-    cv::Mat skeleton;
-    skeleton_width_ = binary.cols;
-    skeleton_height_ = binary.rows;
-    const bool has_skeleton = computeSkeleton(binary.clone(), skeleton);
+    cv::Mat centerline;
+    centerline_width_ = binary.cols;
+    centerline_height_ = binary.rows;
+    const bool has_centerline = computeCenterline(binary, centerline);
 
-    std::vector<cv::Vec4f> lines;
+    std::vector<cv::Vec4i> segments;
     bool detected = false;
-    if (has_skeleton) {
-      detected = detectAxisLines(skeleton, lines);
+    if (has_centerline) {
+      detected = detectLineSegments(centerline, segments);
     }
 
     cv::Point best_corner_roi;
-    const bool found_corner = detected && computeLineIntersection(lines, best_corner_roi);
+    int best_seg_a = -1;
+    int best_seg_b = -1;
+    const bool found_corner = detected &&
+      computeCornerFromSegments(segments, best_corner_roi, best_seg_a, best_seg_b);
 
     int cx = -1;
     int cy = -1;
@@ -157,21 +200,22 @@ private:
       cv::Mat vis = frame.clone();
       cv::rectangle(vis, roi_rect, cv::Scalar(0, 255, 255), 2);
 
-      if (has_skeleton) {
+      if (has_centerline) {
         cv::Mat vis_roi = vis(roi_rect);
-        vis_roi.setTo(cv::Scalar(0, 200, 255), skeleton);
+        vis_roi.setTo(cv::Scalar(0, 200, 255), centerline);
       }
 
       if (detected) {
-        for (const auto & line : lines) {
-          cv::Point2f p(line[2], line[3]);
-          cv::Point2f d(line[0], line[1]);
-          cv::Point2f p0 = p - 1000.0f * d;
-          cv::Point2f p1 = p + 1000.0f * d;
+        for (size_t i = 0; i < segments.size(); ++i) {
+          const auto & seg = segments[i];
+          const bool is_best = (static_cast<int>(i) == best_seg_a ||
+                                static_cast<int>(i) == best_seg_b);
+          const cv::Scalar color = is_best ? cv::Scalar(0, 255, 0) : cv::Scalar(255, 255, 0);
+          const int thickness = is_best ? 2 : 1;
           cv::line(vis,
-                   {cvRound(p0.x), cvRound(p0.y + roi_y)},
-                   {cvRound(p1.x), cvRound(p1.y + roi_y)},
-                   {255, 255, 0}, 1);
+                   {seg[0], seg[1] + roi_y},
+                   {seg[2], seg[3] + roi_y},
+                   color, thickness);
         }
       }
 
@@ -196,99 +240,154 @@ private:
     }
   }
 
-  bool computeSkeleton(cv::Mat mask, cv::Mat &skeleton) const {
-    if (mask.empty()) {
+  bool computeCenterline(const cv::Mat &binary, cv::Mat &centerline) const {
+    if (binary.empty()) {
       return false;
     }
-    cv::Mat element = cv::getStructuringElement(cv::MORPH_CROSS, {3, 3});
-    skeleton = cv::Mat::zeros(mask.size(), CV_8UC1);
-    cv::Mat temp, eroded;
+    cv::Mat binary_01;
+    binary.convertTo(binary_01, CV_8U, 1.0 / 255.0);
+    cv::Mat dist;
+    cv::distanceTransform(binary_01, dist, cv::DIST_L2, 3);
+    double max_val = 0.0;
+    cv::minMaxLoc(dist, nullptr, &max_val);
+    if (max_val <= 0.0) {
+      return false;
+    }
 
-    int iterations = 0;
-    while (true) {
-      cv::erode(mask, eroded, element);
-      cv::dilate(eroded, temp, element);
-      cv::subtract(mask, temp, temp);
-      cv::bitwise_or(skeleton, temp, skeleton);
-      eroded.copyTo(mask);
-      iterations++;
-      if (cv::countNonZero(mask) == 0 || iterations >= skeleton_max_iter_) {
-        break;
-      }
+    const double thr = max_val * std::clamp(centerline_ratio_, 0.1, 0.9);
+    if (centerline_use_nms_) {
+      int ksize = std::max(3, centerline_nms_ksize_ | 1);
+      cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, {ksize, ksize});
+      cv::Mat dist_dil;
+      cv::dilate(dist, dist_dil, kernel);
+      cv::Mat ridge;
+      cv::compare(dist, dist_dil, ridge, cv::CMP_GE);
+      cv::Mat strong;
+      cv::threshold(dist, strong, thr, 255, cv::THRESH_BINARY);
+      strong.convertTo(strong, CV_8U);
+      cv::bitwise_and(ridge, strong, centerline);
+    } else {
+      cv::threshold(dist, centerline, thr, 255, cv::THRESH_BINARY);
+      centerline.convertTo(centerline, CV_8U);
     }
-    const int smooth = std::max(3, skeleton_smooth_ksize_ | 1);
-    if (smooth > 1) {
-      cv::medianBlur(skeleton, skeleton, smooth);
-    }
-    return cv::countNonZero(skeleton) > 0;
+    return cv::countNonZero(centerline) > 0;
   }
 
-  bool detectAxisLines(const cv::Mat &skeleton, std::vector<cv::Vec4f> &lines) const {
-    if (skeleton.empty()) {
+  bool detectLineSegments(const cv::Mat &edge, std::vector<cv::Vec4i> &segments) const {
+    if (edge.empty()) {
       return false;
     }
-    std::vector<cv::Point> points;
-    cv::findNonZero(skeleton, points);
-    if (points.size() < 2) {
+    segments.clear();
+    cv::HoughLinesP(edge, segments, 1.0, CV_PI / 180.0,
+                    std::max(1, hough_threshold_),
+                    std::max(1, hough_min_length_),
+                    std::max(0, hough_max_gap_));
+    return !segments.empty();
+  }
+
+  static float distancePointToSegment(const cv::Point2f &p,
+                                      const cv::Point2f &a,
+                                      const cv::Point2f &b) {
+    const cv::Point2f ab = b - a;
+    const float ab2 = ab.dot(ab);
+    if (ab2 <= 1e-6f) {
+      return cv::norm(p - a);
+    }
+    const float t = std::clamp((p - a).dot(ab) / ab2, 0.0f, 1.0f);
+    const cv::Point2f proj = a + t * ab;
+    return cv::norm(p - proj);
+  }
+
+  bool computeCornerFromSegments(const std::vector<cv::Vec4i> &segments,
+                                 cv::Point &intersection,
+                                 int &seg_a,
+                                 int &seg_b) const {
+    if (segments.size() < 2) {
       return false;
     }
 
-    cv::Mat labels;
-    const int clusters = std::min(2, static_cast<int>(points.size()));
-    cv::Mat data(points.size(), 1, CV_32FC2);
-    for (size_t i = 0; i < points.size(); ++i) {
-      data.at<cv::Vec2f>(i, 0) = cv::Vec2f(points[i].x, points[i].y);
-    }
-    cv::kmeans(data, clusters, labels,
-               cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 10, 1.0),
-               3, cv::KMEANS_PP_CENTERS);
+    const float min_angle = static_cast<float>(corner_angle_min_deg_);
+    const float max_angle = static_cast<float>(corner_angle_max_deg_);
+    const float max_dist = static_cast<float>(std::max(1, corner_max_dist_px_));
+    const int max_x = std::max(0, centerline_width_ - 1);
+    const int max_y = std::max(0, centerline_height_ - 1);
 
-    lines.clear();
-    for (int cluster_idx = 0; cluster_idx < clusters; ++cluster_idx) {
-      std::vector<cv::Point2f> cluster_points;
-      for (int i = 0; i < labels.rows; ++i) {
-        if (labels.at<int>(i) == cluster_idx) {
-          cluster_points.emplace_back(points[i]);
-        }
-      }
-      if (cluster_points.size() < 2) {
+    double best_score = -1e9;
+    cv::Point best_pt;
+    int best_a = -1;
+    int best_b = -1;
+
+    for (size_t i = 0; i < segments.size(); ++i) {
+      const auto &s1 = segments[i];
+      const cv::Point2f p1(s1[0], s1[1]);
+      const cv::Point2f p2(s1[2], s1[3]);
+      const cv::Point2f d1 = p2 - p1;
+      const float len1 = cv::norm(d1);
+      if (len1 < 1.0f) {
         continue;
       }
-      cv::Vec4f line;
-      cv::fitLine(cluster_points, line, cv::DIST_L2, 0, 0.01, 0.01);
-      lines.push_back(line);
-    }
-    return lines.size() == 2;
-  }
+      const cv::Point2f u1 = d1 * (1.0f / len1);
 
-  bool computeLineIntersection(const std::vector<cv::Vec4f> &lines, cv::Point &intersection) const {
-    if (lines.size() != 2) {
+      for (size_t j = i + 1; j < segments.size(); ++j) {
+        const auto &s2 = segments[j];
+        const cv::Point2f p3(s2[0], s2[1]);
+        const cv::Point2f p4(s2[2], s2[3]);
+        const cv::Point2f d2 = p4 - p3;
+        const float len2 = cv::norm(d2);
+        if (len2 < 1.0f) {
+          continue;
+        }
+        const cv::Point2f u2 = d2 * (1.0f / len2);
+
+        float dot = std::fabs(u1.dot(u2));
+        dot = std::clamp(dot, 0.0f, 1.0f);
+        const float angle = std::acos(dot) * 180.0f / static_cast<float>(CV_PI);
+        if (angle < min_angle || angle > max_angle) {
+          continue;
+        }
+
+        const float denom = d1.x * d2.y - d1.y * d2.x;
+        if (std::fabs(denom) < 1e-6f) {
+          continue;
+        }
+        const cv::Point2f diff = p3 - p1;
+        const float t = (diff.x * d2.y - diff.y * d2.x) / denom;
+        const cv::Point2f pt = p1 + t * d1;
+
+        if (pt.x < 0.0f || pt.y < 0.0f || pt.x > max_x || pt.y > max_y) {
+          continue;
+        }
+
+        const float dist1 = distancePointToSegment(pt, p1, p2);
+        const float dist2 = distancePointToSegment(pt, p3, p4);
+        if (dist1 > max_dist || dist2 > max_dist) {
+          continue;
+        }
+
+        const double score = corner_len_weight_ * (len1 + len2)
+          - corner_angle_weight_ * std::fabs(90.0 - angle)
+          - corner_dist_weight_ * (dist1 + dist2);
+
+        if (score > best_score) {
+          best_score = score;
+          best_pt = cv::Point(cvRound(pt.x), cvRound(pt.y));
+          best_a = static_cast<int>(i);
+          best_b = static_cast<int>(j);
+        }
+      }
+    }
+
+    if (best_a < 0 || best_b < 0) {
       return false;
     }
-    const auto &l1 = lines[0];
-    const auto &l2 = lines[1];
 
-    cv::Point2f p1(l1[2], l1[3]);
-    cv::Point2f d1(l1[0], l1[1]);
-    cv::Point2f p2(l2[2], l2[3]);
-    cv::Point2f d2(l2[0], l2[1]);
-
-    float cross = d1.x * d2.y - d1.y * d2.x;
-    if (std::fabs(cross) < 1e-6f) {
-      return false;
-    }
-
-    cv::Point2f diff = p2 - p1;
-    float t = (diff.x * d2.y - diff.y * d2.x) / cross;
-    cv::Point2f pt = p1 + t * d1;
-    intersection = cv::Point(cvRound(pt.x), cvRound(pt.y));
-
+    intersection = best_pt;
     const int min_x = std::max(0, intersection_margin_);
     const int min_y = std::max(0, intersection_margin_);
-    const int max_x = std::max(min_x, skeleton_width_ - 1);
-    const int max_y = std::max(min_y, skeleton_height_ - 1);
     intersection.x = std::clamp(intersection.x, min_x, max_x);
     intersection.y = std::clamp(intersection.y, min_y, max_y);
+    seg_a = best_a;
+    seg_b = best_b;
     return true;
   }
 
@@ -337,20 +436,36 @@ private:
 private:
   std::string image_topic_, error_topic_, debug_topic_, binary_topic_, corner_topic_;
   int threshold_;
+  bool auto_threshold_;
+  double auto_thresh_k_;
+  int auto_thresh_min_;
+  int auto_thresh_max_;
   double roi_ratio_;
   int morph_ksize_;
+  int close_ksize_;
+  int open_ksize_;
   int blur_ksize_;
   int bilateral_d_;
   double bilateral_sigma_color_;
   double bilateral_sigma_space_;
   bool publish_debug_;
   bool publish_binary_debug_;
-  int skeleton_max_iter_;
-  int skeleton_smooth_ksize_;
   int intersection_margin_;
   int border_margin_px_;
-  int skeleton_width_{0};
-  int skeleton_height_{0};
+  double centerline_ratio_;
+  bool centerline_use_nms_;
+  int centerline_nms_ksize_;
+  int hough_threshold_;
+  int hough_min_length_;
+  int hough_max_gap_;
+  double corner_angle_min_deg_;
+  double corner_angle_max_deg_;
+  int corner_max_dist_px_;
+  double corner_len_weight_;
+  double corner_angle_weight_;
+  double corner_dist_weight_;
+  int centerline_width_{0};
+  int centerline_height_{0};
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr error_pub_;
