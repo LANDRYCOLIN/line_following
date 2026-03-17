@@ -3,7 +3,10 @@
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <string>
+#include <thread>
 
 class CameraNode : public rclcpp::Node {
 public:
@@ -12,6 +15,7 @@ public:
     width_        = declare_parameter<int>("width", 640);
     height_       = declare_parameter<int>("height", 480);
     fps_          = declare_parameter<int>("fps", 30);
+    fixed_rate_output_ = declare_parameter<bool>("fixed_rate_output", false);
     use_video_    = declare_parameter<bool>("use_video", true);
     video_path_   = declare_parameter<std::string>("video_path", "/home/mechax/lf_demo/test.mp4");
     frame_id_     = declare_parameter<std::string>("frame_id", "camera_frame");
@@ -47,33 +51,47 @@ public:
       cap_.set(cv::CAP_PROP_FPS,          fps_);
     }
 
-    const int period_ms = (fps_ > 0) ? (1000 / fps_) : 33;
-    timer_ = create_wall_timer(
-      std::chrono::milliseconds(period_ms),
-      std::bind(&CameraNode::tick, this)
-    );
+    if (fixed_rate_output_) {
+      const int period_ms = (fps_ > 0) ? (1000 / fps_) : 33;
+      timer_ = create_wall_timer(
+        std::chrono::milliseconds(period_ms),
+        std::bind(&CameraNode::tick, this)
+      );
+    } else {
+      capture_thread_ = std::thread(&CameraNode::captureLoop, this);
+    }
 
     RCLCPP_INFO(get_logger(),
-      "CameraNode started: index=%d, %dx%d @%dfps, topic=%s",
-      device_index_, width_, height_, fps_, image_topic_.c_str());
+      "CameraNode started: index=%d, %dx%d, fps=%d, fixed_rate_output=%s, topic=%s",
+      device_index_, width_, height_, fps_,
+      fixed_rate_output_ ? "true" : "false", image_topic_.c_str());
+  }
+
+  ~CameraNode() override {
+    running_.store(false);
+    if (capture_thread_.joinable()) {
+      capture_thread_.join();
+    }
   }
 
 private:
-  void tick() {
-    cv::Mat frame;
+  bool readFrame(cv::Mat & frame) {
     if (!cap_.read(frame) || frame.empty()) {
       if (use_video_) {
         cap_.set(cv::CAP_PROP_POS_FRAMES, 0);
         if (!cap_.read(frame) || frame.empty()) {
           RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Failed to read frame");
-          return;
+          return false;
         }
       } else {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Failed to read frame");
-        return;
+        return false;
       }
     }
+    return true;
+  }
 
+  void publishFrame(const cv::Mat & frame) {
     std_msgs::msg::Header header;
     header.stamp = now();
     header.frame_id = frame_id_;
@@ -82,16 +100,52 @@ private:
     pub_->publish(*msg);
   }
 
+  void tick() {
+    cv::Mat frame;
+    if (!readFrame(frame)) {
+      return;
+    }
+    publishFrame(frame);
+  }
+
+  void captureLoop() {
+    const double source_fps = cap_.get(cv::CAP_PROP_FPS);
+    const bool use_video_pacing = use_video_ && source_fps > 1.0;
+    const auto video_period = std::chrono::duration<double>(1.0 / source_fps);
+
+    while (rclcpp::ok() && running_.load()) {
+      const auto loop_start = std::chrono::steady_clock::now();
+
+      cv::Mat frame;
+      if (!readFrame(frame)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      publishFrame(frame);
+
+      if (use_video_pacing) {
+        const auto elapsed = std::chrono::steady_clock::now() - loop_start;
+        const auto remaining = video_period - elapsed;
+        if (remaining > std::chrono::duration<double>::zero()) {
+          std::this_thread::sleep_for(remaining);
+        }
+      }
+    }
+  }
+
 private:
   int device_index_{0}, width_{640}, height_{480}, fps_{30};
+  bool fixed_rate_output_{false};
   bool use_video_{true};
   std::string video_path_{"/home/mechax/lf_demo/test.mp4"};
   std::string frame_id_{"camera_frame"};
   std::string image_topic_{"/camera/image_raw"};
 
+  std::atomic<bool> running_{true};
   cv::VideoCapture cap_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  std::thread capture_thread_;
 };
 
 int main(int argc, char ** argv) {

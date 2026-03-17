@@ -7,6 +7,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -38,6 +39,8 @@ public:
     bilateral_d_   = declare_parameter<int>("bilateral_d", 0);
     bilateral_sigma_color_ = declare_parameter<double>("bilateral_sigma_color", 25.0);
     bilateral_sigma_space_ = declare_parameter<double>("bilateral_sigma_space", 25.0);
+    show_fps_overlay_ = declare_parameter<bool>("show_fps_overlay", true);
+    fps_ema_alpha_ = declare_parameter<double>("fps_ema_alpha", 0.2);
     publish_debug_ = declare_parameter<bool>("publish_debug", true);
     publish_binary_debug_ = declare_parameter<bool>("publish_binary_debug", true);
 
@@ -77,6 +80,8 @@ public:
 
 private:
   void onImage(const sensor_msgs::msg::Image::ConstSharedPtr & msg) {
+    updateRealtimeFps();
+
     cv_bridge::CvImageConstPtr cv_ptr;
     try {
       cv_ptr = cv_bridge::toCvShare(msg, "bgr8");
@@ -235,8 +240,50 @@ private:
                     {20, 40}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 0, 255}, 2);
       }
 
+      if (show_fps_overlay_ && fps_value_ > 0.0) {
+        std::ostringstream fps_ss;
+        fps_ss << std::fixed << std::setprecision(1) << "FPS: " << fps_value_;
+        const std::string fps_text = fps_ss.str();
+        int baseline = 0;
+        const cv::Size text_size = cv::getTextSize(
+          fps_text, cv::FONT_HERSHEY_SIMPLEX, 0.7, 2, &baseline);
+        const int margin = 16;
+        const cv::Point text_org(w - text_size.width - margin, margin + text_size.height);
+        const cv::Rect bg_rect(
+          text_org.x - 8,
+          text_org.y - text_size.height - 6,
+          text_size.width + 16,
+          text_size.height + 12);
+        cv::rectangle(vis, bg_rect, cv::Scalar(0, 0, 0), cv::FILLED);
+        cv::putText(vis, fps_text, text_org,
+                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
+      }
+
       auto out = cv_bridge::CvImage(msg->header, "bgr8", vis).toImageMsg();
       debug_pub_->publish(*out);
+    }
+  }
+
+  void updateRealtimeFps() {
+    const auto now_tp = std::chrono::steady_clock::now();
+    if (!fps_initialized_) {
+      last_frame_tp_ = now_tp;
+      fps_initialized_ = true;
+      return;
+    }
+
+    const std::chrono::duration<double> dt = now_tp - last_frame_tp_;
+    last_frame_tp_ = now_tp;
+    if (dt.count() <= 1e-6) {
+      return;
+    }
+
+    const double inst_fps = 1.0 / dt.count();
+    const double alpha = std::clamp(fps_ema_alpha_, 0.01, 1.0);
+    if (fps_value_ <= 0.0) {
+      fps_value_ = inst_fps;
+    } else {
+      fps_value_ = alpha * inst_fps + (1.0 - alpha) * fps_value_;
     }
   }
 
@@ -448,6 +495,8 @@ private:
   int bilateral_d_;
   double bilateral_sigma_color_;
   double bilateral_sigma_space_;
+  bool show_fps_overlay_;
+  double fps_ema_alpha_;
   bool publish_debug_;
   bool publish_binary_debug_;
   int intersection_margin_;
@@ -466,6 +515,9 @@ private:
   double corner_dist_weight_;
   int centerline_width_{0};
   int centerline_height_{0};
+  bool fps_initialized_{false};
+  double fps_value_{0.0};
+  std::chrono::steady_clock::time_point last_frame_tp_{};
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr error_pub_;
