@@ -44,7 +44,7 @@ public:
       std::chrono::duration_cast<std::chrono::milliseconds>(period),
       std::bind(&PointGuiNode::onTimer, this));
 
-    RCLCPP_INFO(get_logger(), "Point GUI started. Use left drag to move, right click to clear, Q/ESC to quit.");
+    RCLCPP_INFO(get_logger(), "Point GUI started. Use left drag to move, right click to clear, WASD to nudge, R to recenter, Q/ESC to quit.");
   }
 
   ~PointGuiNode() override {
@@ -70,6 +70,7 @@ private:
     point_px_.x = std::clamp(x, 0, width_ - 1);
     point_px_.y = std::clamp(y, 0, height_ - 1);
     point_valid_ = valid;
+    use_exact_center_norm_ = false;
   }
 
   void onTimer() {
@@ -110,8 +111,17 @@ private:
 
     const double nx = valid ? (static_cast<double>(pt.x) / std::max(1, width_ - 1)) : 0.0;
     const double ny = valid ? (static_cast<double>(pt.y) / std::max(1, height_ - 1)) : 0.0;
+    double show_x = nx;
+    double show_y = ny;
+    {
+      std::lock_guard<std::mutex> lock(point_mutex_);
+      if (valid && use_exact_center_norm_) {
+        show_x = 0.5;
+        show_y = 0.5;
+      }
+    }
     char buf[128];
-    std::snprintf(buf, sizeof(buf), "x=%.3f y=%.3f", nx, ny);
+    std::snprintf(buf, sizeof(buf), "x=%.3f y=%.3f", show_x, show_y);
     cv::putText(canvas, buf, {20, height_ - 20},
                 cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(200, 200, 220), 2);
 
@@ -131,6 +141,11 @@ private:
     if (valid) {
       msg.x = static_cast<double>(pt.x) / std::max(1, width_ - 1);
       msg.y = static_cast<double>(pt.y) / std::max(1, height_ - 1);
+      std::lock_guard<std::mutex> lock(point_mutex_);
+      if (use_exact_center_norm_) {
+        msg.x = 0.5;
+        msg.y = 0.5;
+      }
       msg.z = 0.0;
     } else {
       msg.x = std::numeric_limits<double>::quiet_NaN();
@@ -156,6 +171,15 @@ private:
     if (key == 'c' || key == 'C') {
       std::lock_guard<std::mutex> lock(point_mutex_);
       point_valid_ = false;
+      use_exact_center_norm_ = false;
+      return;
+    }
+    if (key == 'r' || key == 'R') {
+      std::lock_guard<std::mutex> lock(point_mutex_);
+      point_px_.x = static_cast<int>(std::round(0.5 * std::max(1, width_ - 1)));
+      point_px_.y = static_cast<int>(std::round(0.5 * std::max(1, height_ - 1)));
+      point_valid_ = true;
+      use_exact_center_norm_ = true;
       return;
     }
 
@@ -167,6 +191,7 @@ private:
     point_px_.x = std::clamp(point_px_.x + dx, 0, width_ - 1);
     point_px_.y = std::clamp(point_px_.y + dy, 0, height_ - 1);
     point_valid_ = true;
+    use_exact_center_norm_ = false;
   }
 
 private:
@@ -187,6 +212,7 @@ private:
   std::mutex point_mutex_;
   cv::Point point_px_{0, 0};
   bool point_valid_{false};
+  bool use_exact_center_norm_{false};
 };
 
 int main(int argc, char ** argv) {

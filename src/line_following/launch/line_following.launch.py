@@ -16,7 +16,7 @@ def generate_launch_description():
                 'height': 480,
                 'fps': 30,
                 'fixed_rate_output': False,
-                'use_video': True,
+                'use_video': False,
                 'video_path': '/home/mechax/lf_demo/test.mp4',
                 'image_topic': '/camera/image_raw'
             }]

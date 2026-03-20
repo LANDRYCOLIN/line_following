@@ -150,7 +150,7 @@ ros2 launch line_following line_following_sim.launch.py
 
 启动后将自动运行：
 
-* GUI 点位模拟器 `point_gui_node`（鼠标拖动设置点位，右键清除，WASD 微调）
+* GUI 点位模拟器 `point_gui_node`（鼠标拖动设置点位，右键清除，WASD 微调，`R` 归中到 `(0.5, 0.5)`）
 * 串口桥接节点 `serial_bridge_node`
 
 ---
