@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <string>
 #include <thread>
 
@@ -20,6 +21,7 @@ public:
     video_path_   = declare_parameter<std::string>("video_path", "/home/mechax/lf_demo/test.mp4");
     frame_id_     = declare_parameter<std::string>("frame_id", "camera_frame");
     image_topic_  = declare_parameter<std::string>("image_topic", "/camera/image_raw");
+    pixel_format_ = declare_parameter<std::string>("pixel_format", "MJPG");
 
     pub_ = create_publisher<sensor_msgs::msg::Image>(image_topic_, rclcpp::SensorDataQoS());
 
@@ -46,6 +48,10 @@ public:
         RCLCPP_FATAL(get_logger(), "Cannot open camera index %d", device_index_);
         throw std::runtime_error("camera open failed");
       }
+      const int requested_fourcc = parseFourcc(pixel_format_);
+      if (requested_fourcc != 0) {
+        cap_.set(cv::CAP_PROP_FOURCC, static_cast<double>(requested_fourcc));
+      }
       cap_.set(cv::CAP_PROP_FRAME_WIDTH,  width_);
       cap_.set(cv::CAP_PROP_FRAME_HEIGHT, height_);
       cap_.set(cv::CAP_PROP_FPS,          fps_);
@@ -65,6 +71,18 @@ public:
       "CameraNode started: index=%d, %dx%d, fps=%d, fixed_rate_output=%s, topic=%s",
       device_index_, width_, height_, fps_,
       fixed_rate_output_ ? "true" : "false", image_topic_.c_str());
+
+    if (!use_video_) {
+      const int actual_w = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
+      const int actual_h = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
+      const double actual_fps = cap_.get(cv::CAP_PROP_FPS);
+      const int actual_fourcc = static_cast<int>(cap_.get(cv::CAP_PROP_FOURCC));
+      RCLCPP_INFO(
+        get_logger(),
+        "Camera negotiated: format=%s, %dx%d @ %.2f fps (requested format=%s)",
+        fourccToString(actual_fourcc).c_str(),
+        actual_w, actual_h, actual_fps, pixel_format_.c_str());
+    }
   }
 
   ~CameraNode() override {
@@ -75,6 +93,29 @@ public:
   }
 
 private:
+  static int parseFourcc(std::string s) {
+    if (s.empty()) return 0;
+    for (char & c : s) {
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    if (s.size() != 4) return 0;
+    return cv::VideoWriter::fourcc(s[0], s[1], s[2], s[3]);
+  }
+
+  static std::string fourccToString(int fourcc) {
+    std::string s(4, ' ');
+    s[0] = static_cast<char>(fourcc & 0xFF);
+    s[1] = static_cast<char>((fourcc >> 8) & 0xFF);
+    s[2] = static_cast<char>((fourcc >> 16) & 0xFF);
+    s[3] = static_cast<char>((fourcc >> 24) & 0xFF);
+    for (char & c : s) {
+      if (!std::isprint(static_cast<unsigned char>(c))) {
+        c = '?';
+      }
+    }
+    return s;
+  }
+
   bool readFrame(cv::Mat & frame) {
     if (!cap_.read(frame) || frame.empty()) {
       if (use_video_) {
@@ -140,6 +181,7 @@ private:
   std::string video_path_{"/home/mechax/lf_demo/test.mp4"};
   std::string frame_id_{"camera_frame"};
   std::string image_topic_{"/camera/image_raw"};
+  std::string pixel_format_{"MJPG"};
 
   std::atomic<bool> running_{true};
   cv::VideoCapture cap_;

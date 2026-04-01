@@ -14,7 +14,8 @@ def generate_launch_description():
                 'device_index': 0,
                 'width': 640,
                 'height': 480,
-                'fps': 30,
+                'fps': 60,
+                'pixel_format': 'MJPG',
                 'fixed_rate_output': False,
                 'use_video': False,
                 'video_path': '/home/mechax/lf_demo/test.mp4',
@@ -59,7 +60,7 @@ def generate_launch_description():
                 'corner_dist_weight': 1.5,
                 'binary_topic': '/line/binary_image',
                 'corner_topic': '/line/corner',
-                'publish_binary_debug': True,
+                'publish_binary_debug': False,
                 'publish_debug': True,
                 'show_fps_overlay': True
             }]
