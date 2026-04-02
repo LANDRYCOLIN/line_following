@@ -33,13 +33,13 @@ def generate_launch_description():
                 'image_topic': '/camera/image_raw',
                 'threshold': 210,
                 'auto_threshold': True,
-                'auto_thresh_k': 1.4, # 检测容忍度
-                'auto_thresh_min': 160,
+                'auto_thresh_k': 0.6, # 检测容忍度
+                'auto_thresh_min': 20,
                 'auto_thresh_max': 235,
                 'roi_ratio': 1.0,
                 'morph_ksize': 5,
-                'close_ksize': 9,
-                'open_ksize': 5,
+                'close_ksize': 7,
+                'open_ksize': 7,
                 'blur_ksize': 5,
                 'bilateral_d': 0,
                 'bilateral_sigma_color': 25.0,
@@ -49,18 +49,18 @@ def generate_launch_description():
                 'centerline_ratio': 0.45,
                 'centerline_use_nms': True,
                 'centerline_nms_ksize': 3,
-                'hough_threshold': 30,
-                'hough_min_length': 20,
-                'hough_max_gap': 20,
+                'hough_threshold': 12,
+                'hough_min_length': 5,
+                'hough_max_gap': 80,
                 'corner_angle_min_deg': 60.0,
                 'corner_angle_max_deg': 120.0,
-                'corner_max_dist_px': 70, # 角点与中心线的最大距离
+                'corner_max_dist_px': 110, # 角点与中心线的最大距离
                 'corner_len_weight': 1.0,
-                'corner_angle_weight': 1.0,
+                'corner_angle_weight': 0.8,
                 'corner_dist_weight': 1.5,
                 'binary_topic': '/line/binary_image',
                 'corner_topic': '/line/corner',
-                'publish_binary_debug': False,
+                'publish_binary_debug': True,
                 'publish_debug': True,
                 'show_fps_overlay': True
             }]
