@@ -281,6 +281,7 @@ serial_bridge_node:
 
 ```bash
 ros2 run rqt_image_view rqt_image_view
+ros2 topic hz /line/corner #查看实时发布帧率 
 ```
 
 选择话题：

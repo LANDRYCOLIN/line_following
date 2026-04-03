@@ -34,7 +34,7 @@ def generate_launch_description():
                 'threshold': 210,
                 'auto_threshold': True,
                 'auto_thresh_k': 0.6, # 检测容忍度
-                'auto_thresh_min': 20,
+                'auto_thresh_min': 40,
                 'auto_thresh_max': 235,
                 'roi_ratio': 1.0,
                 'morph_ksize': 5,
@@ -60,7 +60,7 @@ def generate_launch_description():
                 'corner_dist_weight': 1.5,
                 'binary_topic': '/line/binary_image',
                 'corner_topic': '/line/corner',
-                'publish_binary_debug': True,
+                'publish_binary_debug': False,
                 'publish_debug': True,
                 'show_fps_overlay': True
             }]
