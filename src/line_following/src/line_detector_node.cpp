@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <iomanip>
 #include <limits>
 #include <numeric>
@@ -43,6 +44,11 @@ public:
     fps_ema_alpha_ = declare_parameter<double>("fps_ema_alpha", 0.2);
     publish_debug_ = declare_parameter<bool>("publish_debug", true);
     publish_binary_debug_ = declare_parameter<bool>("publish_binary_debug", true);
+    save_output_video_ = declare_parameter<bool>("save_output_video", false);
+    output_video_path_ = declare_parameter<std::string>(
+      "output_video_path", "/home/mechax/lf_demo/output/line_detector_output.mp4");
+    output_video_fourcc_ = declare_parameter<std::string>("output_video_fourcc", "MJPG");
+    output_video_fps_ = declare_parameter<double>("output_video_fps", 30.0);
 
     intersection_margin_  = declare_parameter<int>("intersection_margin", 2);
     border_margin_px_     = declare_parameter<int>("border_margin_px", 60);
@@ -261,7 +267,17 @@ private:
 
       auto out = cv_bridge::CvImage(msg->header, "bgr8", vis).toImageMsg();
       debug_pub_->publish(*out);
+      writeOutputVideo(vis);
     }
+  }
+
+  static int parseFourcc(std::string s) {
+    if (s.empty()) return 0;
+    for (char & c : s) {
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    if (s.size() != 4) return 0;
+    return cv::VideoWriter::fourcc(s[0], s[1], s[2], s[3]);
   }
 
   void updateRealtimeFps() {
@@ -480,6 +496,49 @@ private:
     }
   }
 
+  void writeOutputVideo(const cv::Mat &frame) {
+    if (!save_output_video_ || frame.empty()) {
+      return;
+    }
+
+    if (!output_writer_.isOpened()) {
+      const std::filesystem::path output_path(output_video_path_);
+      std::error_code ec;
+      if (output_path.has_parent_path()) {
+        std::filesystem::create_directories(output_path.parent_path(), ec);
+        if (ec) {
+          RCLCPP_ERROR(
+            get_logger(), "Failed to create output video dir: %s", ec.message().c_str());
+          save_output_video_ = false;
+          return;
+        }
+      }
+
+      int fourcc = parseFourcc(output_video_fourcc_);
+      if (fourcc == 0) {
+        fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+      }
+
+      const double fps = output_video_fps_ > 1.0 ? output_video_fps_ : 30.0;
+      if (!output_writer_.open(output_video_path_, fourcc, fps, frame.size(), true)) {
+        RCLCPP_ERROR(get_logger(), "Failed to open output video writer: %s", output_video_path_.c_str());
+        save_output_video_ = false;
+        return;
+      }
+
+      RCLCPP_INFO(
+        get_logger(),
+        "Output video recording enabled: path=%s, size=%dx%d, fps=%.2f, fourcc=%s",
+        output_video_path_.c_str(),
+        frame.cols,
+        frame.rows,
+        fps,
+        output_video_fourcc_.c_str());
+    }
+
+    output_writer_.write(frame);
+  }
+
 private:
   std::string image_topic_, error_topic_, debug_topic_, binary_topic_, corner_topic_;
   int threshold_;
@@ -499,6 +558,10 @@ private:
   double fps_ema_alpha_;
   bool publish_debug_;
   bool publish_binary_debug_;
+  bool save_output_video_;
+  std::string output_video_path_;
+  std::string output_video_fourcc_;
+  double output_video_fps_;
   int intersection_margin_;
   int border_margin_px_;
   double centerline_ratio_;
@@ -518,6 +581,7 @@ private:
   bool fps_initialized_{false};
   double fps_value_{0.0};
   std::chrono::steady_clock::time_point last_frame_tp_{};
+  cv::VideoWriter output_writer_;
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr error_pub_;

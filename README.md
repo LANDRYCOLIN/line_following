@@ -142,6 +142,29 @@ video_path: /home/mechax/lf_demo/test.mp4
 
 如需切回摄像头，将 `use_video` 设为 `False` 并设置 `device_index`。
 
+如需在运行时保存输入视频，可启用：
+
+```python
+save_video: True
+save_video_path: /home/mechax/lf_demo/output/camera_record.mp4
+save_video_fourcc: MJPG
+```
+
+也可以通过 launch 参数传入，例如：
+
+```bash
+ros2 launch line_following camera_test.launch.py save_video:=true
+```
+
+如需保存巡线检测后的输出调试视频，可在 `line_detector_node` 中启用：
+
+```python
+save_output_video: True
+output_video_path: /home/mechax/lf_demo/output/line_detector_output.mp4
+output_video_fourcc: MJPG
+output_video_fps: 30.0
+```
+
 ### 6.1 GUI 模拟器运行
 
 ```bash

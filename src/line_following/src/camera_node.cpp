@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <filesystem>
 #include <string>
 #include <thread>
 
@@ -19,6 +20,10 @@ public:
     fixed_rate_output_ = declare_parameter<bool>("fixed_rate_output", false);
     use_video_    = declare_parameter<bool>("use_video", true);
     video_path_   = declare_parameter<std::string>("video_path", "/home/mechax/lf_demo/test.mp4");
+    save_video_   = declare_parameter<bool>("save_video", false);
+    save_video_path_ = declare_parameter<std::string>(
+      "save_video_path", "/home/mechax/lf_demo/output/camera_record.mp4");
+    save_video_fourcc_ = declare_parameter<std::string>("save_video_fourcc", "MJPG");
     frame_id_     = declare_parameter<std::string>("frame_id", "camera_frame");
     image_topic_  = declare_parameter<std::string>("image_topic", "/camera/image_raw");
     pixel_format_ = declare_parameter<std::string>("pixel_format", "MJPG");
@@ -68,9 +73,12 @@ public:
     }
 
     RCLCPP_INFO(get_logger(),
-      "CameraNode started: index=%d, %dx%d, fps=%d, fixed_rate_output=%s, topic=%s",
+      "CameraNode started: index=%d, %dx%d, fps=%d, fixed_rate_output=%s, use_video=%s, save_video=%s, topic=%s",
       device_index_, width_, height_, fps_,
-      fixed_rate_output_ ? "true" : "false", image_topic_.c_str());
+      fixed_rate_output_ ? "true" : "false",
+      use_video_ ? "true" : "false",
+      save_video_ ? "true" : "false",
+      image_topic_.c_str());
 
     if (!use_video_) {
       const int actual_w = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
@@ -132,7 +140,58 @@ private:
     return true;
   }
 
+  void ensureVideoWriter(const cv::Mat & frame) {
+    if (!save_video_ || video_writer_.isOpened()) {
+      return;
+    }
+
+    const std::filesystem::path output_path(save_video_path_);
+    std::error_code ec;
+    if (output_path.has_parent_path()) {
+      std::filesystem::create_directories(output_path.parent_path(), ec);
+      if (ec) {
+        RCLCPP_ERROR(
+          get_logger(), "Failed to create video output dir: %s", ec.message().c_str());
+        save_video_ = false;
+        return;
+      }
+    }
+
+    int fourcc = parseFourcc(save_video_fourcc_);
+    if (fourcc == 0) {
+      fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+    }
+
+    double output_fps = static_cast<double>(fps_);
+    if (output_fps <= 1.0) {
+      output_fps = cap_.get(cv::CAP_PROP_FPS);
+    }
+    if (output_fps <= 1.0) {
+      output_fps = 30.0;
+    }
+
+    if (!video_writer_.open(save_video_path_, fourcc, output_fps, frame.size(), true)) {
+      RCLCPP_ERROR(get_logger(), "Failed to open video writer: %s", save_video_path_.c_str());
+      save_video_ = false;
+      return;
+    }
+
+    RCLCPP_INFO(
+      get_logger(),
+      "Video recording enabled: path=%s, size=%dx%d, fps=%.2f, fourcc=%s",
+      save_video_path_.c_str(),
+      frame.cols,
+      frame.rows,
+      output_fps,
+      save_video_fourcc_.c_str());
+  }
+
   void publishFrame(const cv::Mat & frame) {
+    ensureVideoWriter(frame);
+    if (save_video_ && video_writer_.isOpened()) {
+      video_writer_.write(frame);
+    }
+
     std_msgs::msg::Header header;
     header.stamp = now();
     header.frame_id = frame_id_;
@@ -178,13 +237,17 @@ private:
   int device_index_{0}, width_{640}, height_{480}, fps_{30};
   bool fixed_rate_output_{false};
   bool use_video_{true};
+  bool save_video_{false};
   std::string video_path_{"/home/mechax/lf_demo/test.mp4"};
+  std::string save_video_path_{"/home/mechax/lf_demo/output/camera_record.mp4"};
+  std::string save_video_fourcc_{"MJPG"};
   std::string frame_id_{"camera_frame"};
   std::string image_topic_{"/camera/image_raw"};
   std::string pixel_format_{"MJPG"};
 
   std::atomic<bool> running_{true};
   cv::VideoCapture cap_;
+  cv::VideoWriter video_writer_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::thread capture_thread_;

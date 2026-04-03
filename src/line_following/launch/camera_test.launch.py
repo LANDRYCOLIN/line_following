@@ -11,6 +11,9 @@ def generate_launch_description():
     fps = LaunchConfiguration('fps')
     image_topic = LaunchConfiguration('image_topic')
     pixel_format = LaunchConfiguration('pixel_format')
+    save_video = LaunchConfiguration('save_video')
+    save_video_path = LaunchConfiguration('save_video_path')
+    save_video_fourcc = LaunchConfiguration('save_video_fourcc')
 
     return LaunchDescription([
         DeclareLaunchArgument('device_index', default_value='0'),
@@ -19,6 +22,12 @@ def generate_launch_description():
         DeclareLaunchArgument('fps', default_value='60'),
         DeclareLaunchArgument('image_topic', default_value='/camera/image_raw'),
         DeclareLaunchArgument('pixel_format', default_value='MJPG'),
+        DeclareLaunchArgument('save_video', default_value='false'),
+        DeclareLaunchArgument(
+            'save_video_path',
+            default_value='/home/mechax/lf_demo/output/camera_record.mp4',
+        ),
+        DeclareLaunchArgument('save_video_fourcc', default_value='MJPG'),
 
         Node(
             package='line_following',
@@ -33,6 +42,9 @@ def generate_launch_description():
                 'pixel_format': pixel_format,
                 'fixed_rate_output': False,
                 'use_video': False,
+                'save_video': save_video,
+                'save_video_path': save_video_path,
+                'save_video_fourcc': save_video_fourcc,
                 'image_topic': image_topic
             }]
         ),
