@@ -1,4 +1,4 @@
-# line_following
+# auto_cast
 
 一个基于 **ROS 2 (Jazzy) + OpenCV** 的巡线感知 Demo，面向 **白色宽条** 场景，支持 **视频回放或摄像头输入**，输出角点与误差，适合巡线小车与后续控制闭环扩展。
 
@@ -35,7 +35,7 @@
      |  /camera/image_raw
      v
 +---------------------+
-| line_detector_node  |
+| corner_detector_node|
 |  - white strip seg  |
 |  - centerline/Hough |
 +-----+---------+-----+
@@ -84,19 +84,28 @@ sudo apt install \
 ```
 26_auto_cast/
 ├── src/
-│   └── line_following/
-│       ├── src/
-│       │   ├── camera_node.cpp          # 相机发布节点
-│       │   ├── line_detector_node.cpp   # 巡线检测节点（白条+角点）
-│       │   ├── line_controller_node.cpp # 预留控制器节点（当前为占位实现）
-│       │   └── serial_bridge_node.cpp   # 串口桥接到 MCU
-│       │   └── point_gui_node.cpp       # GUI 手动点位模拟器
-│       │
-│       ├── launch/
-│       │   ├── line_following.launch.py     # 一键启动全流程（相机+检测+串口）
-│       │   └── line_following_sim.launch.py # GUI 模拟器（手动点位+串口）
-│       │
-│       ├── include/                     # 头文件（如需拆分）
+│   ├── camera/
+│   │   ├── src/camera_node.cpp
+│   │   ├── launch/camera_test.launch.py
+│   │   ├── CMakeLists.txt
+│   │   └── package.xml
+│   ├── corner_control/
+│   │   ├── src/corner_detector_node.cpp
+│   │   ├── src/corner_controller_node.cpp
+│   │   ├── launch/corner_control.launch.py
+│   │   ├── CMakeLists.txt
+│   │   └── package.xml
+│   ├── simulation/
+│   │   ├── src/point_gui_node.cpp
+│   │   ├── launch/corner_sim.launch.py
+│   │   ├── CMakeLists.txt
+│   │   └── package.xml
+│   ├── serial_bridge/
+│   │   ├── src/serial_bridge_node.cpp
+│   │   ├── CMakeLists.txt
+│   │   └── package.xml
+│   └── laser/
+│       ├── src/laser_node.cpp
 │       ├── CMakeLists.txt
 │       └── package.xml
 │
@@ -112,7 +121,7 @@ sudo apt install \
 
 ```bash
 cd ~/26_auto_cast
-colcon build --packages-select line_following
+colcon build --packages-select camera corner_control simulation serial_bridge laser
 source install/setup.bash
 ```
 
@@ -121,19 +130,19 @@ source install/setup.bash
 ## 6. 运行
 
 ```bash
-ros2 launch line_following line_following.launch.py
+ros2 launch corner_control corner_control.launch.py
 ```
 
 启动后将自动运行：
 
 * 相机节点 `camera_node`
-* 巡线检测节点 `line_detector_node`
+* 角点检测节点 `corner_detector_node`
 * 串口桥接节点 `serial_bridge_node`
 * `rqt_image_view`
 
 ### 6.0 输入源切换（视频 / 摄像头）
 
-默认使用视频作为输入，可在 `line_following.launch.py` 中调整：
+默认使用视频作为输入，可在 `corner_control.launch.py` 中调整：
 
 ```python
 use_video: True
@@ -145,7 +154,7 @@ video_path: /home/mechax/26_auto_cast/test.mp4
 ### 6.1 GUI 模拟器运行
 
 ```bash
-ros2 launch line_following line_following_sim.launch.py
+ros2 launch simulation corner_sim.launch.py
 ```
 
 启动后将自动运行：
@@ -176,15 +185,15 @@ ros2 launch line_following line_following_sim.launch.py
 
 ## 8. 参数配置
 
-当前示例在 [src/line_following/launch/line_following.launch.py](src/line_following/launch/line_following.launch.py) 中**以内联参数**形式配置所有节点；
+当前示例在 [src/corner_control/launch/corner_control.launch.py](src/corner_control/launch/corner_control.launch.py) 中**以内联参数**形式配置所有节点；
 如果你更习惯 YAML，可以新建 `config/*.yaml` 并在 launch 中通过 `parameters=[PathJoinSubstitution([...])]` 引用。
 
 下面给出与当前 launch 等价的 YAML 示例，便于迁移到外部配置文件。
 
-### 8.1 巡线检测节点（line_detector_node）
+### 8.1 角点检测节点（corner_detector_node）
 
 ```yaml
-line_detector_node:
+corner_detector_node:
   ros__parameters:
     image_topic: /camera/image_raw
     error_topic: /line/error
@@ -313,7 +322,7 @@ ros2 topic echo /line/error
 
 ## 11. 后续可扩展方向
 
-* 添加 `line_controller_node`（误差 → 速度控制）
+* 添加 `corner_controller_node`（误差 → 速度控制）
 * PID 参数配置化
 * 自适应阈值 / 光照鲁棒性增强
 * 接入实体小车或仿真环境

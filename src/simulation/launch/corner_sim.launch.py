@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package='line_following',
+            package='simulation',
             executable='point_gui_node',
             name='point_gui_node',
             output='screen',
@@ -23,7 +23,7 @@ def generate_launch_description():
             }]
         ),
         Node(
-            package='line_following',
+            package='serial_bridge',
             executable='serial_bridge_node',
             name='serial_bridge_node',
             output='screen',

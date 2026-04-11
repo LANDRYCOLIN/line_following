@@ -21,7 +21,7 @@ def generate_launch_description():
         DeclareLaunchArgument('pixel_format', default_value='MJPG'),
 
         Node(
-            package='line_following',
+            package='camera',
             executable='camera_node',
             name='camera_node',
             output='screen',

@@ -2,8 +2,8 @@
 
 int main(int argc, char ** argv) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<rclcpp::Node>("line_controller_node");
-  RCLCPP_INFO(node->get_logger(), "line_controller_node started");
+  auto node = std::make_shared<rclcpp::Node>("corner_controller_node");
+  RCLCPP_INFO(node->get_logger(), "corner_controller_node started");
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

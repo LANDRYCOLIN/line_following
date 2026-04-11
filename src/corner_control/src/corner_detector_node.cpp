@@ -16,9 +16,9 @@
 #include <string>
 #include <vector>
 
-class LineDetectorNode : public rclcpp::Node {
+class CornerDetectorNode : public rclcpp::Node {
 public:
-  LineDetectorNode() : Node("line_detector_node") {
+  CornerDetectorNode() : Node("corner_detector_node") {
     // -------- Parameters --------
     image_topic_   = declare_parameter<std::string>("image_topic", "/camera/image_raw");
     error_topic_   = declare_parameter<std::string>("error_topic", "/line/error");
@@ -69,11 +69,11 @@ public:
     image_sub_ = create_subscription<sensor_msgs::msg::Image>(
       image_topic_,
       rclcpp::SensorDataQoS(),
-      std::bind(&LineDetectorNode::onImage, this, std::placeholders::_1)
+      std::bind(&CornerDetectorNode::onImage, this, std::placeholders::_1)
     );
 
     RCLCPP_INFO(get_logger(),
-      "LineDetector started. image_topic=%s, error_topic=%s, corner_topic=%s, debug_topic=%s, binary_topic=%s",
+      "CornerDetector started. image_topic=%s, error_topic=%s, corner_topic=%s, debug_topic=%s, binary_topic=%s",
       image_topic_.c_str(), error_topic_.c_str(), corner_topic_.c_str(),
       debug_topic_.c_str(), binary_topic_.c_str());
   }
@@ -528,7 +528,7 @@ private:
 
 int main(int argc, char ** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<LineDetectorNode>());
+  rclcpp::spin(std::make_shared<CornerDetectorNode>());
   rclcpp::shutdown();
   return 0;
 }

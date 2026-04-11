@@ -6,7 +6,7 @@ def generate_launch_description():
 
         # -------- Camera Node --------
         Node(
-            package='line_following',
+            package='camera',
             executable='camera_node',
             name='camera_node',
             output='screen',
@@ -23,11 +23,11 @@ def generate_launch_description():
             }]
         ),
 
-        # -------- Line Detector Node --------
+        # -------- Corner Detector Node --------
         Node(
-            package='line_following',
-            executable='line_detector_node',
-            name='line_detector_node',
+            package='corner_control',
+            executable='corner_detector_node',
+            name='corner_detector_node',
             output='screen',
             parameters=[{
                 'image_topic': '/camera/image_raw',
@@ -79,7 +79,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package='line_following',
+            package='serial_bridge',
             executable='serial_bridge_node',
             name='serial_bridge_node',
             output='screen',
