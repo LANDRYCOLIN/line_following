@@ -79,10 +79,10 @@ sudo apt install \
 
 ## 4. 工程结构
 
-以本仓库为 ROS 2 工作空间根目录（lf_demo）为例：
+以本仓库为 ROS 2 工作空间根目录（`26_auto_cast`）为例：
 
 ```
-lf_demo/
+26_auto_cast/
 ├── src/
 │   └── line_following/
 │       ├── src/
@@ -111,7 +111,7 @@ lf_demo/
 ## 5. 编译
 
 ```bash
-cd ~/lf_demo
+cd ~/26_auto_cast
 colcon build --packages-select line_following
 source install/setup.bash
 ```
@@ -137,7 +137,7 @@ ros2 launch line_following line_following.launch.py
 
 ```python
 use_video: True
-video_path: /home/mechax/lf_demo/test.mp4
+video_path: /home/mechax/26_auto_cast/test.mp4
 ```
 
 如需切回摄像头，将 `use_video` 设为 `False` 并设置 `device_index`。

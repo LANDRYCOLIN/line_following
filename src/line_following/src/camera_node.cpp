@@ -18,7 +18,7 @@ public:
     fps_          = declare_parameter<int>("fps", 30);
     fixed_rate_output_ = declare_parameter<bool>("fixed_rate_output", false);
     use_video_    = declare_parameter<bool>("use_video", true);
-    video_path_   = declare_parameter<std::string>("video_path", "/home/mechax/lf_demo/test.mp4");
+    video_path_   = declare_parameter<std::string>("video_path", "/home/mechax/26_auto_cast/test.mp4");
     frame_id_     = declare_parameter<std::string>("frame_id", "camera_frame");
     image_topic_  = declare_parameter<std::string>("image_topic", "/camera/image_raw");
     pixel_format_ = declare_parameter<std::string>("pixel_format", "MJPG");
@@ -178,7 +178,7 @@ private:
   int device_index_{0}, width_{640}, height_{480}, fps_{30};
   bool fixed_rate_output_{false};
   bool use_video_{true};
-  std::string video_path_{"/home/mechax/lf_demo/test.mp4"};
+  std::string video_path_{"/home/mechax/26_auto_cast/test.mp4"};
   std::string frame_id_{"camera_frame"};
   std::string image_topic_{"/camera/image_raw"};
   std::string pixel_format_{"MJPG"};

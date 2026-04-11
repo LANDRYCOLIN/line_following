@@ -18,7 +18,7 @@ def generate_launch_description():
                 'pixel_format': 'MJPG',
                 'fixed_rate_output': False,
                 'use_video': False,
-                'video_path': '/home/mechax/lf_demo/test.mp4',
+                'video_path': '/home/mechax/26_auto_cast/test.mp4',
                 'image_topic': '/camera/image_raw'
             }]
         ),
@@ -66,6 +66,18 @@ def generate_launch_description():
             }]
         ),
 
+        # -------- Laser Node --------
+        Node(
+            package='laser',
+            executable='laser_node',
+            name='laser_node',
+            output='screen',
+            parameters=[{
+                'port_name': '/dev/ttyACM0',
+                'baud_rate': 230400
+            }]
+        ),
+
         Node(
             package='line_following',
             executable='serial_bridge_node',
@@ -74,6 +86,8 @@ def generate_launch_description():
             parameters=[{
                 'serial_port': '/dev/ttyUSB0',
                 'corner_topic': '/line/corner',
+                'laser_dist_topic': '/lidar_dist',
+                'laser_valid_topic': '/lidar_valid',
                 'send_period_ms': 20,
                 'confidence_value': 255,
                 'log_heartbeat': True
