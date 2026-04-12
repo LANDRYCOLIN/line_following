@@ -113,6 +113,7 @@ def generate_launch_description():
             parameters=[{
                 'serial_port': '/dev/ttyUSB0',
                 'corner_topic': '/line/corner',
+                'vertical_line_topic': '/vertical_line/line',
                 'laser_dist_topic': '/lidar_dist',
                 'laser_valid_topic': '/lidar_valid',
                 'send_period_ms': 20,
