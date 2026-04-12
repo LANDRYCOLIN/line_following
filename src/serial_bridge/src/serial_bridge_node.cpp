@@ -1,5 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/point.hpp"
+#include "std_msgs/msg/u_int16.hpp"
+#include "std_msgs/msg/u_int8.hpp"
 
 #include <fcntl.h>
 #include <termios.h>
@@ -18,8 +20,10 @@
 namespace {
 constexpr uint8_t SOF = 0xA5;
 constexpr uint8_t TYPE_VISION_POINT = 0x01;
+constexpr uint8_t TYPE_LASER_RANGE = 0x04;
 constexpr uint8_t TYPE_HEARTBEAT = 0x81;
 constexpr uint8_t PAYLOAD_LEN_VISION = 6;
+constexpr uint8_t PAYLOAD_LEN_LASER = 3;
 constexpr uint8_t PAYLOAD_LEN_HEARTBEAT = 5;
 constexpr uint8_t TYPE_VISION_ECHO = 0x82;
 constexpr uint8_t PAYLOAD_LEN_ECHO = 6;
@@ -45,6 +49,8 @@ public:
   SerialBridgeNode() : Node("serial_bridge_node"), seq_(0) {
     serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyUSB0");
     corner_topic_ = declare_parameter<std::string>("corner_topic", "/line/corner");
+    laser_dist_topic_ = declare_parameter<std::string>("laser_dist_topic", "/lidar_dist");
+    laser_valid_topic_ = declare_parameter<std::string>("laser_valid_topic", "/lidar_valid");
     publish_heartbeat_log_ = declare_parameter<bool>("log_heartbeat", true);
     confidence_value_ = declare_parameter<int>("confidence_value", 255);
     send_period_ms_ = declare_parameter<int>("send_period_ms", 20);
@@ -55,10 +61,17 @@ public:
     }
 
     latest_point_ = {false, 0.0, 0.0};
+    latest_laser_ = {false, 0};
 
     corner_sub_ = create_subscription<geometry_msgs::msg::Point>(
       corner_topic_, 10,
       std::bind(&SerialBridgeNode::onCorner, this, std::placeholders::_1));
+    laser_dist_sub_ = create_subscription<std_msgs::msg::UInt16>(
+      laser_dist_topic_, 10,
+      std::bind(&SerialBridgeNode::onLaserDistance, this, std::placeholders::_1));
+    laser_valid_sub_ = create_subscription<std_msgs::msg::UInt8>(
+      laser_valid_topic_, 10,
+      std::bind(&SerialBridgeNode::onLaserValid, this, std::placeholders::_1));
 
     const auto period = std::chrono::milliseconds(std::max(5, send_period_ms_));
     timer_ = create_wall_timer(period, std::bind(&SerialBridgeNode::onTimer, this));
@@ -66,7 +79,13 @@ public:
     running_.store(true);
     reader_thread_ = std::thread(&SerialBridgeNode::readLoop, this);
 
-    RCLCPP_INFO(get_logger(), "Serial bridge running on %s (115200 8N1)", serial_port_.c_str());
+    RCLCPP_INFO(
+      get_logger(),
+      "Serial bridge running on %s (115200 8N1), corner_topic=%s, laser_dist_topic=%s, laser_valid_topic=%s",
+      serial_port_.c_str(),
+      corner_topic_.c_str(),
+      laser_dist_topic_.c_str(),
+      laser_valid_topic_.c_str());
   }
 
   ~SerialBridgeNode() override {
@@ -84,6 +103,11 @@ private:
     bool valid;
     double x;
     double y;
+  };
+
+  struct LaserRange {
+    bool valid;
+    uint16_t range_q;
   };
 
   bool openPort() {
@@ -129,6 +153,16 @@ private:
     latest_point_ = vp;
   }
 
+  void onLaserDistance(const std_msgs::msg::UInt16::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(laser_mutex_);
+    latest_laser_.range_q = static_cast<uint16_t>(std::min<uint32_t>(msg->data, 2000U));
+  }
+
+  void onLaserValid(const std_msgs::msg::UInt8::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(laser_mutex_);
+    latest_laser_.valid = (msg->data != 0);
+  }
+
   void onTimer() {
     if (fd_ < 0) {
       return;
@@ -138,35 +172,51 @@ private:
       std::lock_guard<std::mutex> lock(point_mutex_);
       vp = latest_point_;
     }
+    LaserRange laser;
+    {
+      std::lock_guard<std::mutex> lock(laser_mutex_);
+      laser = latest_laser_;
+    }
 
-    uint8_t payload[PAYLOAD_LEN_VISION] = {0};
-    payload[0] = vp.valid ? 1 : 0;
+    uint8_t vision_payload[PAYLOAD_LEN_VISION] = {0};
+    vision_payload[0] = vp.valid ? 1 : 0;
     const auto clamp_norm = [](double v) {
       if (!std::isfinite(v)) return 0.0;
       return std::max(0.0, std::min(1.0, v));
     };
     uint16_t x_q = static_cast<uint16_t>(std::round(clamp_norm(vp.x) * 10000.0));
     uint16_t y_q = static_cast<uint16_t>(std::round(clamp_norm(vp.y) * 10000.0));
-    payload[1] = static_cast<uint8_t>(x_q & 0xFF);
-    payload[2] = static_cast<uint8_t>((x_q >> 8) & 0xFF);
-    payload[3] = static_cast<uint8_t>(y_q & 0xFF);
-    payload[4] = static_cast<uint8_t>((y_q >> 8) & 0xFF);
-    payload[5] = static_cast<uint8_t>(std::clamp(confidence_value_, 0, 255));
+    vision_payload[1] = static_cast<uint8_t>(x_q & 0xFF);
+    vision_payload[2] = static_cast<uint8_t>((x_q >> 8) & 0xFF);
+    vision_payload[3] = static_cast<uint8_t>(y_q & 0xFF);
+    vision_payload[4] = static_cast<uint8_t>((y_q >> 8) & 0xFF);
+    vision_payload[5] = static_cast<uint8_t>(std::clamp(confidence_value_, 0, 255));
+    writeFrame(TYPE_VISION_POINT, vision_payload, PAYLOAD_LEN_VISION);
 
+    uint8_t laser_payload[PAYLOAD_LEN_LASER] = {0};
+    const uint16_t laser_range_q = laser.valid ? laser.range_q : 0;
+    laser_payload[0] = laser.valid ? 1 : 0;
+    laser_payload[1] = static_cast<uint8_t>(laser_range_q & 0xFF);
+    laser_payload[2] = static_cast<uint8_t>((laser_range_q >> 8) & 0xFF);
+    writeFrame(TYPE_LASER_RANGE, laser_payload, PAYLOAD_LEN_LASER);
+  }
+
+  void writeFrame(uint8_t type, const uint8_t * payload, uint8_t payload_len) {
     std::array<uint8_t, 1 + 1 + 1 + 1 + PAYLOAD_LEN_VISION + 2> frame{};
     frame[0] = SOF;
-    frame[1] = PAYLOAD_LEN_VISION;
-    frame[2] = TYPE_VISION_POINT;
+    frame[1] = payload_len;
+    frame[2] = type;
     frame[3] = seq_++;
-    std::memcpy(frame.data() + 4, payload, PAYLOAD_LEN_VISION);
-    const uint16_t crc = crc16_ccitt(frame.data(), frame.size() - 2);
-    frame[4 + PAYLOAD_LEN_VISION] = static_cast<uint8_t>(crc & 0xFF);
-    frame[5 + PAYLOAD_LEN_VISION] = static_cast<uint8_t>((crc >> 8) & 0xFF);
+    std::memcpy(frame.data() + 4, payload, payload_len);
+    const size_t total_len = 1 + 1 + 1 + 1 + payload_len + 2;
+    const uint16_t crc = crc16_ccitt(frame.data(), total_len - 2);
+    frame[4 + payload_len] = static_cast<uint8_t>(crc & 0xFF);
+    frame[5 + payload_len] = static_cast<uint8_t>((crc >> 8) & 0xFF);
 
-    ssize_t written = ::write(fd_, frame.data(), frame.size());
+    const ssize_t written = ::write(fd_, frame.data(), total_len);
     if (written < 0) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Serial write failed: %s", strerror(errno));
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Serial write failed: %s", strerror(errno));
     }
   }
 
@@ -242,6 +292,8 @@ if (type == TYPE_HEARTBEAT && len == PAYLOAD_LEN_HEARTBEAT) {
 private:
   std::string serial_port_;
   std::string corner_topic_;
+  std::string laser_dist_topic_;
+  std::string laser_valid_topic_;
   bool publish_heartbeat_log_; 
   int confidence_value_;
   int send_period_ms_;
@@ -251,10 +303,14 @@ private:
   std::thread reader_thread_;
 
   rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr corner_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr laser_dist_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr laser_valid_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   std::mutex point_mutex_;
+  std::mutex laser_mutex_;
   VisionPoint latest_point_;
+  LaserRange latest_laser_;
   uint8_t seq_;
 
 };

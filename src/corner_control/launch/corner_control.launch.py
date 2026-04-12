@@ -33,7 +33,7 @@ def generate_launch_description():
                 'image_topic': '/camera/image_raw',
                 'threshold': 210,
                 'auto_threshold': True,
-                'auto_thresh_k': 0.6, # 检测容忍度
+                'auto_thresh_k': 0.8, # 检测容忍度
                 'auto_thresh_min': 40,
                 'auto_thresh_max': 235,
                 'roi_ratio': 1.0,
