@@ -1,6 +1,6 @@
 # auto_cast
 
-一个基于 **ROS 2 (Jazzy) + OpenCV** 的巡线感知 Demo，面向 **白色宽条** 场景，支持 **视频回放或摄像头输入**，输出角点与误差，适合巡线小车与后续控制闭环扩展。
+一个基于 **ROS 2 (Jazzy) + OpenCV** 的巡线感知 Demo，面向 **白色宽条** 场景，支持 **视频回放或摄像头输入**，输出角点、竖线结果与误差，适合巡线小车与后续控制闭环扩展。
 
 ---
 
@@ -16,8 +16,13 @@
   - 距离变换提取中心线（适配宽条）
   - Hough 线段 + 角点筛选（支持 L/T 角点，非严格 90 度）
   - 角点位置归一化输出（左上角为 0,0）
+- 竖向白条检测节点：
+  - 复用 `/line/binary_image`
+  - 只筛接近竖直方向的线段
+  - 输出相对竖直方向的有符号角度偏差
+  - 输出该线在 `y=0.5` 处的归一化横坐标
 - 发布调试图像 `/line/debug_image`
-- 串口桥接节点：按照固定帧格式将视觉坐标以 50 Hz 下发到电控 MCU，并回读心跳
+- 串口桥接节点：按照固定帧格式将角点、竖线和激光数据下发到电控 MCU，并回读心跳
 - 参数全部支持 YAML / launch 配置
 - 使用 `launch` 启动
 
@@ -39,12 +44,21 @@
 |  - white strip seg  |
 |  - centerline/Hough |
 +-----+---------+-----+
-  |         |
+  |         | 
   |         +--> /line/debug_image (Image)
   |             /line/binary_image (Image)
   |
   +--> /line/error  (Float32)
        /line/corner (Point)
+             |
+             v
+   +------------------------+
+   | vertical_line_detector |
+   +-----------+------------+
+               |
+               +--> /vertical_line/line (Point)
+                    /vertical_line/angle_deg (Float32)
+                    /vertical_line/x_at_y_half (Float32)
         |
         v
        +----------------------+
@@ -104,6 +118,11 @@ sudo apt install \
 │   │   ├── src/serial_bridge_node.cpp
 │   │   ├── CMakeLists.txt
 │   │   └── package.xml
+│   ├── vertical_line_control/
+│   │   ├── src/vertical_line_detector_node.cpp
+│   │   ├── launch/vertical_line_control.launch.py
+│   │   ├── CMakeLists.txt
+│   │   └── package.xml
 │   └── laser/
 │       ├── src/laser_node.cpp
 │       ├── CMakeLists.txt
@@ -121,7 +140,7 @@ sudo apt install \
 
 ```bash
 cd ~/26_auto_cast
-colcon build --packages-select camera corner_control simulation serial_bridge laser
+colcon build --packages-select camera corner_control simulation serial_bridge laser vertical_line_control
 source install/setup.bash
 ```
 
@@ -137,8 +156,9 @@ ros2 launch corner_control corner_control.launch.py
 
 * 相机节点 `camera_node`
 * 角点检测节点 `corner_detector_node`
+* 竖线检测节点 `vertical_line_detector_node`
 * 串口桥接节点 `serial_bridge_node`
-* `rqt_image_view`
+* `rqt_image_view`（仅当 `ENABLE_RQT = True`）
 
 ### 6.0 输入源切换（视频 / 摄像头）
 
@@ -180,6 +200,9 @@ ros2 launch simulation corner_sim.launch.py
 | `/line/corner`      | `geometry_msgs/Point` | 角点归一化坐标（L/T 角点，左上为 0,0） |
 | `/line/binary_image`| `sensor_msgs/Image` | 二值化调试图，便于 rqt 排查 |
 | `/line/debug_image` | `sensor_msgs/Image` | 巡线调试图像           |
+| `/vertical_line/line` | `geometry_msgs/Point` | 竖线结果，`x=x@0.5`，`y=0.5`，`z=angle_deg` |
+| `/vertical_line/angle_deg` | `std_msgs/Float32` | 竖线相对竖直方向的有符号偏差角 |
+| `/vertical_line/x_at_y_half` | `std_msgs/Float32` | 竖线在 `y=0.5` 处的归一化横坐标 |
 
 ---
 
@@ -239,6 +262,7 @@ serial_bridge_node:
   ros__parameters:
     serial_port: /dev/pts/4      # 示例中使用 pseudo TTY，实际 MCU 可改为 /dev/ttyUSB0
     corner_topic: /line/corner
+    vertical_line_topic: /vertical_line/line
     send_period_ms: 20           # 50 Hz
     confidence_value: 255
     log_heartbeat: true
@@ -278,6 +302,7 @@ serial_bridge_node:
 | `publish_binary_debug`| 是否发布二值化调试图                 |
 | `publish_debug`       | 是否发布叠加调试图                  |
 | `serial_port`         | 串口设备路径（如 `/dev/ttyUSB0`）       |
+| `vertical_line_topic` | 竖线结果输入话题                    |
 | `send_period_ms`      | 串口下发周期（毫秒）                |
 | `confidence_value`    | 无额外置信度时的填充值               |
 | `log_heartbeat`       | 是否打印 MCU 心跳日志（DEBUG 级别）      |
@@ -315,6 +340,9 @@ ros2 topic echo /line/error
 * 镜头畸变较大时建议使用 `camera_calibration` 先标定，再在相机节点中进行去畸变以提升识别精度
 * 串口帧格式：`SOF(0xA5) | LEN | TYPE | SEQ | PAYLOAD | CRC16`  
   * VISION_POINT (`TYPE=0x01`, LEN=6)：`valid(1B) | x_q(2B) | y_q(2B) | conf(1B)`，`x_q=y_q=round(norm*10000)`  
+  * VERTICAL_LINE (`TYPE=0x05`, LEN=6)：`valid(1B) | x_q(2B) | angle_q(2B) | conf(1B)`  
+    * `x_q = round(clamp(x@0.5, 0, 1) * 10000)`
+    * `angle_q = round(angle_deg * 100)`，`int16_t` 小端发送
   * MCU_HEARTBEAT (`TYPE=0x81`, LEN=5)：`mode | err | seq_echo | counter(2B)`  
   * CRC16-CCITT，多项式 `0x1021`，初值 `0xFFFF`，不反转，小端发送（低字节在前）
 
