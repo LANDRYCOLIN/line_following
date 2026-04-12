@@ -51,6 +51,7 @@ public:
     corner_topic_ = declare_parameter<std::string>("corner_topic", "/line/corner");
     laser_dist_topic_ = declare_parameter<std::string>("laser_dist_topic", "/lidar_dist");
     laser_valid_topic_ = declare_parameter<std::string>("laser_valid_topic", "/lidar_valid");
+    port_status_topic_ = declare_parameter<std::string>("port_status_topic", "/serial_bridge/port_ok");
     publish_heartbeat_log_ = declare_parameter<bool>("log_heartbeat", true);
     confidence_value_ = declare_parameter<int>("confidence_value", 255);
     send_period_ms_ = declare_parameter<int>("send_period_ms", 20);
@@ -72,6 +73,7 @@ public:
     laser_valid_sub_ = create_subscription<std_msgs::msg::UInt8>(
       laser_valid_topic_, 10,
       std::bind(&SerialBridgeNode::onLaserValid, this, std::placeholders::_1));
+    port_status_pub_ = create_publisher<std_msgs::msg::UInt8>(port_status_topic_, 10);
 
     const auto period = std::chrono::milliseconds(std::max(5, send_period_ms_));
     timer_ = create_wall_timer(period, std::bind(&SerialBridgeNode::onTimer, this));
@@ -164,6 +166,8 @@ private:
   }
 
   void onTimer() {
+    publishPortStatus();
+
     if (fd_ < 0) {
       return;
     }
@@ -215,9 +219,18 @@ private:
 
     const ssize_t written = ::write(fd_, frame.data(), total_len);
     if (written < 0) {
+      last_write_ok_ = false;
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000, "Serial write failed: %s", strerror(errno));
+      return;
     }
+    last_write_ok_ = (static_cast<size_t>(written) == total_len);
+  }
+
+  void publishPortStatus() {
+    std_msgs::msg::UInt8 msg;
+    msg.data = (fd_ >= 0 && last_write_ok_) ? 1 : 0;
+    port_status_pub_->publish(msg);
   }
 
   void readLoop() {
@@ -294,17 +307,20 @@ private:
   std::string corner_topic_;
   std::string laser_dist_topic_;
   std::string laser_valid_topic_;
+  std::string port_status_topic_;
   bool publish_heartbeat_log_; 
   int confidence_value_;
   int send_period_ms_;
 
   int fd_{-1};
+  bool last_write_ok_{true};
   std::atomic<bool> running_{false};
   std::thread reader_thread_;
 
   rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr corner_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr laser_dist_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr laser_valid_sub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr port_status_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   std::mutex point_mutex_;

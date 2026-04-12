@@ -33,6 +33,7 @@ public:
         valid_pub_ = this->create_publisher<std_msgs::msg::UInt8>("/lidar_valid", 10);
         // 保留 conf_pub_
         conf_pub_ = this->create_publisher<std_msgs::msg::UInt8>("/lidar_conf", 10);
+        port_status_pub_ = this->create_publisher<std_msgs::msg::UInt8>("/laser/port_ok", 10);
 
         port_name_ = this->declare_parameter<std::string>("port_name", "/dev/ttyACM0");
         baud_rate_ = this->declare_parameter<int>("baud_rate", 230400);
@@ -217,11 +218,16 @@ private:
         std_msgs::msg::UInt8 conf_msg;
         conf_msg.data = latest_conf_;
         conf_pub_->publish(conf_msg);
+
+        std_msgs::msg::UInt8 port_msg;
+        port_msg.data = (fd_ >= 0) ? 1 : 0;
+        port_status_pub_->publish(port_msg);
     }
 
     rclcpp::Publisher<std_msgs::msg::UInt16>::SharedPtr dist_pub_;
     rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr valid_pub_;
     rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr conf_pub_;
+    rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr port_status_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr pub_timer_;
     

@@ -121,6 +121,26 @@ def generate_launch_description():
             }]
         ),
 
+        Node(
+            package='system_monitor',
+            executable='system_monitor_node',
+            name='system_monitor_node',
+            output='log',
+            parameters=[{
+                'image_topic': '/camera/image_raw',
+                'corner_topic': '/line/corner',
+                'vertical_line_topic': '/vertical_line/line',
+                'lidar_dist_topic': '/lidar_dist',
+                'lidar_valid_topic': '/lidar_valid',
+                'serial_port_status_topic': '/serial_bridge/port_ok',
+                'laser_port_status_topic': '/laser/port_ok',
+                'status_topic': '/system_monitor/status',
+                'publish_period_ms': 1000,
+                'topic_timeout_ms': 500,
+                'image_timeout_ms': 500,
+                'port_timeout_ms': 1500
+            }]
+        ),
     ]
 
     if ENABLE_RQT:
