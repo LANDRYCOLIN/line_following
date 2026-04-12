@@ -1,8 +1,10 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
+ENABLE_RQT = False
+
 def generate_launch_description():
-    return LaunchDescription([
+    nodes = [
 
         # -------- Camera Node --------
         Node(
@@ -60,9 +62,34 @@ def generate_launch_description():
                 'corner_dist_weight': 1.5,
                 'binary_topic': '/line/binary_image',
                 'corner_topic': '/line/corner',
-                'publish_binary_debug': False,
+                'publish_binary_debug': True,
                 'publish_debug': True,
                 'show_fps_overlay': True
+            }]
+        ),
+
+        # -------- Vertical Line Detector Node --------
+        Node(
+            package='vertical_line_control',
+            executable='vertical_line_detector_node',
+            name='vertical_line_detector_node',
+            output='screen',
+            parameters=[{
+                'binary_topic': '/line/binary_image',
+                'line_topic': '/vertical_line/line',
+                'angle_topic': '/vertical_line/angle_deg',
+                'x_topic': '/vertical_line/x_at_y_half',
+                'debug_topic': '/vertical_line/debug_image',
+                'publish_debug': True,
+                'show_fps_overlay': True,
+                'morph_open_ksize': 3,
+                'morph_close_ksize': 5,
+                'border_margin_px': 8,
+                'hough_threshold': 12,
+                'hough_min_length': 30,
+                'hough_max_gap': 40,
+                'max_abs_angle_deg': 30.0,
+                'angle_penalty': 2.0
             }]
         ),
 
@@ -94,11 +121,16 @@ def generate_launch_description():
             }]
         ),
 
-        # -------- rqt_image_view (optional) --------
-        Node(
-            package='rqt_image_view',
-            executable='rqt_image_view',
-            name='rqt_image_view',
-            output='screen'
+    ]
+
+    if ENABLE_RQT:
+        nodes.append(
+            Node(
+                package='rqt_image_view',
+                executable='rqt_image_view',
+                name='rqt_image_view',
+                output='screen'
+            )
         )
-    ])
+
+    return LaunchDescription(nodes)
