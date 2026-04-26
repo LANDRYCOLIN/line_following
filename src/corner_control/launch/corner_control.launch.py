@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
-ENABLE_RQT = False
+ENABLE_RQT = True
 
 def generate_launch_description():
     nodes = [
@@ -19,8 +19,8 @@ def generate_launch_description():
                 'fps': 60,
                 'pixel_format': 'MJPG',
                 'fixed_rate_output': False,
-                'use_video': False,
-                'video_path': '/home/mechax/26_auto_cast/test.mp4',
+                'use_video': True,
+                'video_path': '/home/causin/26_auto_cast/test.mp4',
                 'image_topic': '/camera/image_raw'
             }]
         ),
@@ -35,8 +35,8 @@ def generate_launch_description():
                 'image_topic': '/camera/image_raw',
                 'threshold': 210,
                 'auto_threshold': True,
-                'auto_thresh_k': 0.8, # 检测容忍度
-                'auto_thresh_min': 40,
+                'auto_thresh_k': 1.4, # 检测容忍度
+                'auto_thresh_min': 160,
                 'auto_thresh_max': 235,
                 'roi_ratio': 1.0,
                 'morph_ksize': 5,
@@ -88,7 +88,7 @@ def generate_launch_description():
                 'hough_threshold': 12,
                 'hough_min_length': 30,
                 'hough_max_gap': 40,
-                'max_abs_angle_deg': 30.0,
+                'max_abs_angle_deg': 35.0,
                 'angle_penalty': 2.0
             }]
         ),
