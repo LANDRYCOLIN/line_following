@@ -75,20 +75,45 @@ def generate_launch_description():
             name='vertical_line_detector_node',
             output='screen',
             parameters=[{
+                # ==========================================
+                # 1. 基础话题配置 (Topic Configuration)
+                # ==========================================
                 'binary_topic': '/line/binary_image',
                 'line_topic': '/vertical_line/line',
                 'angle_topic': '/vertical_line/angle_deg',
                 'x_topic': '/vertical_line/x_at_y_half',
                 'debug_topic': '/vertical_line/debug_image',
-                'publish_debug': True,
-                'show_fps_overlay': True,
+
+                # ==========================================
+                # 2. 核心动态调参区 (Core Tuning Parameters)
+                # ==========================================
+                # [平滑阻尼] 绿线的时序信任度 (0.01 ~ 1.0)。
+                # 0.85 意味着极度跟手；如果觉得绿线抖，可以适当降低 (如 0.5)
+                'output_ema_alpha': 0.85,     
+                
+                # [防带偏死锁] 允许的最大拟合偏角。
+                # 截图里你设了 40.0度，有点宽松，如果急弯不多，建议收紧到 25.0 左右
+                'max_abs_angle_deg': 40.0,    
+                
+                # [边缘防噪] 画面边缘裁剪像素。
+                # 设为 15 代表画面最外圈 15 个像素会被物理涂黑，防止视野边缘的杂物干扰
+                'border_margin_px': 15,       
+
+                # ==========================================
+                # 3. 视觉与显示 (Debug & Visualization)
+                # ==========================================
+                'publish_debug': True,        # 是否发布 rqt 用的调试图像
+                'show_fps_overlay': True,     # 是否在图像左上角显示 FPS
+                'fps_ema_alpha': 0.2,         # FPS 数值的刷新平滑度
+
+                # ==========================================
+                # 4. 底层/遗留兼容参数 (通常不需要动)
+                # ==========================================
                 'morph_open_ksize': 3,
                 'morph_close_ksize': 5,
-                'border_margin_px': 8,
-                'hough_threshold': 12,
+                'hough_threshold': 15,
                 'hough_min_length': 30,
                 'hough_max_gap': 40,
-                'max_abs_angle_deg': 35.0,
                 'angle_penalty': 2.0
             }]
         ),
