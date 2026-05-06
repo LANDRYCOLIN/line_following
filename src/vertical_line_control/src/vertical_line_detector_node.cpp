@@ -28,13 +28,18 @@ public:
     morph_close_ksize_ = declare_parameter<int>("morph_close_ksize", 5);
     border_margin_px_ = declare_parameter<int>("border_margin_px", 8);
     hough_threshold_ = declare_parameter<int>("hough_threshold", 12);
-    hough_min_length_ = declare_parameter<int>("hough_min_length", 30);
+    hough_min_length_ = declare_parameter<int>("hough_min_length", 20);
     hough_max_gap_ = declare_parameter<int>("hough_max_gap", 40);
-    max_abs_angle_deg_ = declare_parameter<double>("max_abs_angle_deg", 30.0);
+    
+    max_abs_angle_deg_ = declare_parameter<double>("max_abs_angle_deg", 35.0); 
     angle_penalty_ = declare_parameter<double>("angle_penalty", 2.0);
+    
     publish_debug_ = declare_parameter<bool>("publish_debug", true);
     show_fps_overlay_ = declare_parameter<bool>("show_fps_overlay", true);
     fps_ema_alpha_ = declare_parameter<double>("fps_ema_alpha", 0.2);
+    
+    // 听你的！恢复 0.85 的高信任度，保证指哪打哪不迟缓
+    output_ema_alpha_ = declare_parameter<double>("output_ema_alpha", 0.85); 
 
     line_pub_ = create_publisher<geometry_msgs::msg::Point>(line_topic_, 10);
     angle_pub_ = create_publisher<std_msgs::msg::Float32>(angle_topic_, 10);
@@ -42,26 +47,17 @@ public:
     debug_pub_ = create_publisher<sensor_msgs::msg::Image>(debug_topic_, 1);
 
     binary_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      binary_topic_,
-      rclcpp::SensorDataQoS(),
+      binary_topic_, rclcpp::SensorDataQoS(),
       std::bind(&VerticalLineDetectorNode::onBinaryImage, this, std::placeholders::_1));
 
-    RCLCPP_INFO(
-      get_logger(),
-      "VerticalLineDetector started. binary_topic=%s, line_topic=%s, angle_topic=%s, x_topic=%s",
-      binary_topic_.c_str(),
-      line_topic_.c_str(),
-      angle_topic_.c_str(),
-      x_topic_.c_str());
+    RCLCPP_INFO(get_logger(), "VerticalLineDetector (Piecewise Filter Edition) started.");
   }
 
 private:
   struct CandidateLine {
-    cv::Point2f p1;
-    cv::Point2f p2;
     double angle_deg;
-    double length;
-    double score;
+    double x_at_center;
+    std::vector<cv::Point> track_pts; 
   };
 
   void onBinaryImage(const sensor_msgs::msg::Image::ConstSharedPtr & msg) {
@@ -70,40 +66,53 @@ private:
     cv_bridge::CvImageConstPtr cv_ptr;
     try {
       cv_ptr = cv_bridge::toCvShare(msg, msg->encoding);
-    } catch (const cv_bridge::Exception & e) {
-      RCLCPP_ERROR(get_logger(), "cv_bridge exception: %s", e.what());
-      publishInvalid(msg->header);
+    } catch (...) {
+      handleInvalidDetection();
       return;
     }
 
     if (cv_ptr->image.empty()) {
-      publishInvalid(msg->header);
+      handleInvalidDetection();
       return;
     }
 
-    cv::Mat gray;
-    if (cv_ptr->image.channels() == 1) {
-      gray = cv_ptr->image.clone();
-    } else {
-      cv::cvtColor(cv_ptr->image, gray, cv::COLOR_BGR2GRAY);
-    }
-
     cv::Mat binary;
-    cv::threshold(gray, binary, 127, 255, cv::THRESH_BINARY);
-    applyMorphology(binary);
+    if (cv_ptr->image.channels() == 1) {
+      binary = cv_ptr->image.clone();
+    } else {
+      cv::cvtColor(cv_ptr->image, binary, cv::COLOR_BGR2GRAY);
+    }
+    cv::threshold(binary, binary, 127, 255, cv::THRESH_BINARY);
+
     applyBorderMask(binary);
 
     CandidateLine best_line;
     const bool found = detectBestVerticalLine(binary, best_line);
 
+    // =================================================================
+    // 【核心落实 1】：你的时间分段滤波与 NaN 输出逻辑
+    // =================================================================
     if (found) {
-      publishDetection(msg->header, binary.size(), best_line);
+      lost_frames_ = 0; // 一旦找到，重置丢帧计数
+      publishDetection(binary.size(), best_line);
     } else {
-      publishInvalid(msg->header);
+      handleInvalidDetection();
     }
 
     if (publish_debug_) {
-      publishDebugImage(msg->header, binary, found, best_line);
+      publishDebugImage(binary, found, best_line);
+    }
+  }
+  
+  // 专门处理丢失情况的函数
+  void handleInvalidDetection() {
+    lost_frames_++;
+    publishInvalid(); // 输出 NaN，同时此时空值绝不更新 EMA 滤波器
+
+    // 当连续丢值达到 3 帧，确认为路口断层分界点。
+    // 强行断开滤波历史，下一段将作为全新的一段重新开始计算！
+    if (lost_frames_ >= MAX_LOST_FRAMES_) {
+      filter_initialized_ = false;
     }
   }
 
@@ -114,52 +123,20 @@ private:
       fps_initialized_ = true;
       return;
     }
-
     const std::chrono::duration<double> dt = now_tp - last_frame_tp_;
     last_frame_tp_ = now_tp;
-    if (dt.count() <= 1e-6) {
-      return;
-    }
-
-    const double inst_fps = 1.0 / dt.count();
-    const double alpha = std::clamp(fps_ema_alpha_, 0.01, 1.0);
-    if (fps_value_ <= 0.0) {
-      fps_value_ = inst_fps;
-    } else {
-      fps_value_ = alpha * inst_fps + (1.0 - alpha) * fps_value_;
-    }
-  }
-
-  void applyMorphology(cv::Mat &binary) const {
-    if (binary.empty()) {
-      return;
-    }
-
-    if (morph_open_ksize_ > 1) {
-      int k = std::max(3, morph_open_ksize_ | 1);
-      cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, {k, k});
-      cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
-    }
-
-    if (morph_close_ksize_ > 1) {
-      int k = std::max(3, morph_close_ksize_ | 1);
-      cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, {k, k});
-      cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel);
+    if (dt.count() > 1e-6) {
+      const double inst_fps = 1.0 / dt.count();
+      fps_value_ = fps_value_ <= 0.0 ? inst_fps : fps_ema_alpha_ * inst_fps + (1.0 - fps_ema_alpha_) * fps_value_;
     }
   }
 
   void applyBorderMask(cv::Mat &binary) const {
-    if (binary.empty()) {
-      return;
-    }
+    if (binary.empty()) return;
     const int margin = std::max(0, border_margin_px_);
-    if (margin == 0) {
-      return;
-    }
-
+    if (margin == 0) return;
     const int margin_x = std::min(margin, std::max(0, binary.cols / 2 - 1));
     const int margin_y = std::min(margin, std::max(0, binary.rows / 2 - 1));
-
     if (margin_y > 0) {
       binary.rowRange(0, margin_y).setTo(0);
       binary.rowRange(binary.rows - margin_y, binary.rows).setTo(0);
@@ -170,64 +147,136 @@ private:
     }
   }
 
-  bool detectBestVerticalLine(const cv::Mat &binary, CandidateLine &best_line) const {
-    std::vector<cv::Vec4i> segments;
-    cv::HoughLinesP(binary, segments, 1.0, CV_PI / 180.0,
-                    std::max(1, hough_threshold_),
-                    std::max(1, hough_min_length_),
-                    std::max(0, hough_max_gap_));
-    if (segments.empty()) {
-      return false;
+  bool detectBestVerticalLine(cv::Mat &binary, CandidateLine &best_line) {
+    int h = binary.rows;
+    int w = binary.cols;
+
+    struct TrackPoint { float x; float y; float width; };
+    std::vector<TrackPoint> all_pts;
+
+    // 1. 全图无差别扫描
+    for (int y = h - 1; y >= 0; y -= 3) {
+      const uint8_t* row = binary.ptr<uint8_t>(y);
+      std::vector<std::pair<int, int>> segments;
+      int start = -1;
+      
+      for (int x = 0; x < w; ++x) {
+        if (row[x] > 127 && start == -1) start = x;
+        else if (row[x] <= 127 && start != -1) {
+          segments.push_back({start, x - 1});
+          start = -1;
+        }
+      }
+      if (start != -1) segments.push_back({start, w - 1});
+
+      float expected_x_at_y = filter_initialized_ ? smoothed_x_ + (y - h/2.0f) * std::tan(smoothed_angle_ * CV_PI / 180.0) : w / 2.0f;
+      float best_cx = -1;
+      float best_w = -1;
+      float min_dist = 1e9;
+
+      for (auto& seg : segments) {
+        int seg_w = seg.second - seg.first;
+        
+        // 粗筛：过滤 45% 宽度的巨大横道
+        if (seg_w < 5 || seg_w > w * 0.45f) continue; 
+
+        float cx = (seg.first + seg.second) / 2.0f;
+        float dist = std::abs(cx - expected_x_at_y);
+
+        // =================================================================
+        // 【新增】：距离锁死！解决上一轮红箭头指出的“远处独立噪点劫持”问题。
+        // 只要偏离预测中心线 80 个像素，哪怕它宽度完美，也当场枪毙！
+        // =================================================================
+        if (filter_initialized_ && dist > 80.0f) continue;
+
+        if (dist < min_dist) {
+          min_dist = dist;
+          best_cx = cx;
+          best_w = seg_w;
+        }
+      }
+
+      if (best_cx >= 0) {
+        all_pts.push_back({best_cx, static_cast<float>(y), best_w});
+      }
     }
 
-    bool found = false;
-    double best_score = -std::numeric_limits<double>::infinity();
+    if (all_pts.size() < 5) return false;
 
-    for (const auto & seg : segments) {
-      cv::Point2f p1(seg[0], seg[1]);
-      cv::Point2f p2(seg[2], seg[3]);
-      if (p2.y < p1.y) {
-        std::swap(p1, p2);
-      }
+    // 2. 百分位数找准纯净基准宽度
+    std::vector<float> widths;
+    for (const auto& p : all_pts) widths.push_back(p.width);
+    std::sort(widths.begin(), widths.end());
 
-      const double dx = static_cast<double>(p2.x - p1.x);
-      const double dy = static_cast<double>(p2.y - p1.y);
-      const double length = std::hypot(dx, dy);
-      if (length < 1.0) {
-        continue;
-      }
+    int robust_idx = static_cast<int>(widths.size() * 0.15);
+    float robust_min_width = widths[std::min(robust_idx, static_cast<int>(widths.size() - 1))];
 
-      const double angle_deg = std::atan2(dx, dy) * 180.0 / CV_PI;
-      if (std::abs(angle_deg) > max_abs_angle_deg_) {
-        continue;
-      }
+    std::vector<cv::Point> track_pts;
+    std::vector<cv::Point2f> fit_pts;
 
-      const double score = length - angle_penalty_ * std::abs(angle_deg);
-      if (!found || score > best_score) {
-        found = true;
-        best_score = score;
-        best_line = CandidateLine{p1, p2, angle_deg, length, score};
+    for (size_t i = 0; i < all_pts.size(); ++i) {
+      const auto& p = all_pts[i];
+      // 宽度提纯：过滤掉由于倒角导致的异常增宽部分
+      if (p.width <= robust_min_width + 15.0f) {
+        
+        // =================================================================
+        // 【核心落实 2】：空间上的连续丢值截断！
+        // 如果在提取时发现上下两个点 Y 轴距离差巨大，说明中间被抠掉了一个大盲区。
+        // 直接在此处作为分界点截断！绝不将上下两段连起来拟合！
+        // =================================================================
+        if (!fit_pts.empty()) {
+          float y_diff = std::abs(p.y - fit_pts.back().y);
+          if (y_diff > 45.0f) break; 
+        }
+
+        track_pts.push_back({static_cast<int>(p.x), static_cast<int>(p.y)});
+        fit_pts.push_back({p.x, p.y});
       }
     }
 
-    return found;
+    if (fit_pts.size() < 4) return false;
+
+    // 3. 完美 L2 鲁棒拟合
+    cv::Vec4f line_params;
+    cv::fitLine(fit_pts, line_params, cv::DIST_L2, 0, 0.01, 0.01);
+
+    float vx = line_params[0];
+    float vy = line_params[1];
+    float x0 = line_params[2];
+    float y0 = line_params[3];
+
+    if (std::abs(vy) < 1e-6f) return false;
+
+    double dx = vx;
+    double dy = vy;
+    if (dy < 0) { dx = -dx; dy = -dy; }
+
+    double raw_angle_deg = std::atan2(dx, dy) * 180.0 / CV_PI;
+
+    if (std::abs(raw_angle_deg) > max_abs_angle_deg_) return false;
+
+    // 4. 执行时序平滑（只在连续有效的数据段内进行）
+    const float target_y = h / 2.0f;
+    double raw_x_center = x0 + (target_y - y0) * dx / dy;
+
+    if (!filter_initialized_) {
+      smoothed_x_ = raw_x_center;
+      smoothed_angle_ = raw_angle_deg;
+      filter_initialized_ = true;
+    } else {
+      double alpha = std::clamp(output_ema_alpha_, 0.01, 1.0);
+      smoothed_x_ = alpha * raw_x_center + (1.0 - alpha) * smoothed_x_;
+      smoothed_angle_ = alpha * raw_angle_deg + (1.0 - alpha) * smoothed_angle_;
+    }
+
+    best_line.angle_deg = smoothed_angle_;
+    best_line.x_at_center = smoothed_x_;
+    best_line.track_pts = track_pts; 
+    return true;
   }
 
-  void publishDetection(const std_msgs::msg::Header & header,
-                        const cv::Size & image_size,
-                        const CandidateLine & line) {
-    const double y_query_px = 0.5 * static_cast<double>(std::max(0, image_size.height - 1));
-    const double dy = static_cast<double>(line.p2.y - line.p1.y);
-    const double dx = static_cast<double>(line.p2.x - line.p1.x);
-
-    if (std::abs(dy) < 1e-6) {
-      publishInvalid(header);
-      return;
-    }
-
-    const double x_query_px = static_cast<double>(line.p1.x) +
-      (y_query_px - static_cast<double>(line.p1.y)) * dx / dy;
-    const double x_norm = x_query_px / static_cast<double>(std::max(1, image_size.width - 1));
+  void publishDetection(const cv::Size & image_size, const CandidateLine & line) {
+    const double x_norm = line.x_at_center / static_cast<double>(std::max(1, image_size.width - 1));
 
     geometry_msgs::msg::Point line_msg;
     line_msg.x = std::clamp(x_norm, 0.0, 1.0);
@@ -244,97 +293,86 @@ private:
     x_pub_->publish(x_msg);
   }
 
-  void publishInvalid(const std_msgs::msg::Header & header) {
-    (void)header;
+  void publishInvalid() {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-
+    // 保证在路口盲区输出纯正的 NaN
     geometry_msgs::msg::Point line_msg;
-    line_msg.x = nan;
-    line_msg.y = nan;
-    line_msg.z = nan;
+    line_msg.x = nan; line_msg.y = nan; line_msg.z = nan;
     line_pub_->publish(line_msg);
 
-    std_msgs::msg::Float32 angle_msg;
-    angle_msg.data = std::numeric_limits<float>::quiet_NaN();
-    angle_pub_->publish(angle_msg);
-
-    std_msgs::msg::Float32 x_msg;
-    x_msg.data = std::numeric_limits<float>::quiet_NaN();
-    x_pub_->publish(x_msg);
+    std_msgs::msg::Float32 f_msg; f_msg.data = nan;
+    angle_pub_->publish(f_msg); x_pub_->publish(f_msg);
+    
+    // 【注意】：这里故意删除了旧版的 filter_initialized_ = false;
+    // 让 EMA 滤波器暂时挂起，直到连续丢弃超过阈值才会真正重置。实现了分段隔离。
   }
 
-  void publishDebugImage(const std_msgs::msg::Header & header,
-                         const cv::Mat &binary,
-                         bool found,
-                         const CandidateLine & line) {
+  void publishDebugImage(const cv::Mat &binary, bool found, const CandidateLine & line) {
     cv::Mat vis;
     cv::cvtColor(binary, vis, cv::COLOR_GRAY2BGR);
+    
+    const int h = vis.rows; const int w = vis.cols;
+    const int y_half = static_cast<int>(std::lround(0.5 * std::max(0, h - 1)));
+    
+    cv::line(vis, {0, y_half}, {std::max(0, w - 1), y_half}, cv::Scalar(255, 0, 0), 1);
+    cv::line(vis, {w / 2, 0}, {w / 2, h - 1}, cv::Scalar(255, 0, 0), 1);
 
-    const int h = binary.rows;
-    const int w = binary.cols;
-    const int y_half = static_cast<int>(std::lround(0.5 * static_cast<double>(std::max(0, h - 1))));
-    cv::line(vis, {0, y_half}, {std::max(0, w - 1), y_half}, cv::Scalar(255, 128, 0), 1);
-
-    if (found) {
-      cv::line(vis, line.p1, line.p2, cv::Scalar(0, 255, 0), 2);
-      const double dy = static_cast<double>(line.p2.y - line.p1.y);
-      const double dx = static_cast<double>(line.p2.x - line.p1.x);
-      if (std::abs(dy) > 1e-6) {
-        const double x_half = static_cast<double>(line.p1.x) +
-          (static_cast<double>(y_half) - static_cast<double>(line.p1.y)) * dx / dy;
-        const int x_half_i = static_cast<int>(
-          std::lround(std::clamp(x_half, 0.0, static_cast<double>(std::max(0, w - 1)))));
-        cv::drawMarker(vis, {x_half_i, y_half}, cv::Scalar(0, 0, 255),
-                       cv::MARKER_CROSS, 20, 2);
+    if (found && !line.track_pts.empty()) {
+      for (const auto& pt : line.track_pts) {
+        cv::circle(vis, pt, 2, cv::Scalar(0, 165, 255), -1);
       }
 
+      double rad = line.angle_deg * CV_PI / 180.0;
+      double dx = std::sin(rad);
+      double dy = std::cos(rad);
+      
+      float tangent_len = 100.0f;
+      cv::Point2f center_pt(static_cast<float>(line.x_at_center), static_cast<float>(y_half));
+      cv::Point2f p_top(center_pt.x - dx * tangent_len, center_pt.y - dy * tangent_len);
+      cv::Point2f p_bot(center_pt.x + dx * tangent_len, center_pt.y + dy * tangent_len);
+
+      cv::line(vis, p_top, p_bot, cv::Scalar(0, 255, 0), 3);
+      cv::drawMarker(vis, center_pt, cv::Scalar(0, 0, 255), cv::MARKER_CROSS, 20, 2);
+
       std::ostringstream oss;
-      oss << std::fixed << std::setprecision(3)
-          << "angle=" << line.angle_deg << " deg";
-      cv::putText(vis, oss.str(), {20, 30},
-                  cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
+      oss << std::fixed << std::setprecision(3) << "angle=" << line.angle_deg << " deg";
+      cv::putText(vis, oss.str(), {20, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 165, 255), 2);
     } else {
-      cv::putText(vis, "vertical line not found", {20, 30},
-                  cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+      cv::putText(vis, "vertical line not found", {20, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
     }
-
+    
     if (show_fps_overlay_ && fps_value_ > 0.0) {
-      std::ostringstream fps_ss;
-      fps_ss << std::fixed << std::setprecision(1) << "FPS: " << fps_value_;
-      cv::putText(vis, fps_ss.str(), {20, 60},
-                  cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
+      std::ostringstream fps_ss; fps_ss << std::fixed << std::setprecision(1) << "FPS: " << fps_value_;
+      cv::putText(vis, fps_ss.str(), {20, 60}, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
     }
-
-    auto debug_msg = cv_bridge::CvImage(header, "bgr8", vis).toImageMsg();
-    debug_pub_->publish(*debug_msg);
+    
+    std_msgs::msg::Header header;
+    header.stamp = this->now();
+    header.frame_id = "camera_frame";
+    debug_pub_->publish(*cv_bridge::CvImage(header, "bgr8", vis).toImageMsg());
   }
 
-  std::string binary_topic_;
-  std::string line_topic_;
-  std::string angle_topic_;
-  std::string x_topic_;
-  std::string debug_topic_;
-
-  int morph_open_ksize_;
-  int morph_close_ksize_;
-  int border_margin_px_;
-  int hough_threshold_;
-  int hough_min_length_;
-  int hough_max_gap_;
-  double max_abs_angle_deg_;
-  double angle_penalty_;
-  bool publish_debug_;
-  bool show_fps_overlay_;
-  double fps_ema_alpha_;
-
+  std::string binary_topic_, line_topic_, angle_topic_, x_topic_, debug_topic_;
+  int morph_open_ksize_, morph_close_ksize_, border_margin_px_;
+  int hough_threshold_, hough_min_length_, hough_max_gap_;
+  double max_abs_angle_deg_, angle_penalty_, fps_ema_alpha_, output_ema_alpha_;
+  bool publish_debug_, show_fps_overlay_;
+  
   bool fps_initialized_{false};
   double fps_value_{0.0};
   std::chrono::steady_clock::time_point last_frame_tp_{};
 
+  // ==========================================
+  // 【状态机变量】：管控分段滤波与丢帧阈值
+  // ==========================================
+  double smoothed_x_{-1.0}, smoothed_angle_{0.0};
+  bool filter_initialized_{false};
+  int lost_frames_{0};                   
+  const int MAX_LOST_FRAMES_{3};         
+
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr binary_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr line_pub_;
-  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr angle_pub_;
-  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr x_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr angle_pub_, x_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
 };
 
